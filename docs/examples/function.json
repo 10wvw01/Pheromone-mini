@@ -1,0 +1,41 @@
+{
+  "name": "processor.so",
+  "description": "消费整数",
+  "version": "1.2.0",
+  "resource": {
+    "cpu_cores": 2,
+    "memory_mb": 1024,
+    "timeout_ms": 10000,
+    "gpu": {
+      "required": false,
+      "device_count": 0,
+      "memory_mb": 0
+    },
+    "disk_mb": 0,
+    "network_mbps": 0
+  },
+  "execution": {
+    "type": "thread",
+    "priority": 0,
+    "affinity": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "max_concurrency": 4,
+    "reuse": true
+  },
+  "dependencies": {
+    "produces_to": [],
+    "depends_on": [
+      "producer.so"
+    ]
+  },
+  "triggers": {
+    "listen_buckets": [
+      "b_named"
+    ],
+    "conditions": []
+  }
+}

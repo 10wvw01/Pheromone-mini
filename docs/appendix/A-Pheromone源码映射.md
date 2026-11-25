@@ -35,6 +35,12 @@ Pheromone 的 app_register_handler 对 DIRECT 类型依赖直接加入下发的 
 
 本项目保持这一语义：DIRECT 先查依赖边；普通数据事件再查 Bucket ImmediateTrigger。V0.3 不允许同一个输出在未声明策略的情况下双路触发。
 
+### A.3.1 Local Trigger 与 Coordinator Trigger 的协同
+
+Pheromone 的 Local Scheduler 在本地收到对象写入消息后先执行 Trigger 匹配；若某些 Trigger 已在本地生成 Action，会把 active_trigger_names 随 notify_put 请求发送给 Coordinator。Coordinator 收到通知后仍会遍历 Bucket Trigger，但会跳过 active_trigger_names 中已在本地生效的规则，避免同一条规则在 Local Scheduler 和 Coordinator 两侧重复调度；其他规则仍可由 Coordinator 完成全局触发与节点选择。Local Scheduler 和 Coordinator 还通过 Trigger 更新消息同步规则状态。
+
+V0.3 不复制这套双侧匹配机制：DataReadyQueue 由目标 Scheduler Process 消费，Event Trigger 是唯一规则匹配点；匹配结果构建成 TaskDescriptor 后再交给 Node Scheduler。Node Scheduler 只负责节点选择，不再二次调用 ImmediateTrigger。该收敛减少状态复制和跨层同步，是当前预研 Demo 的明确简化点。
+
 ## A.4 ImmediateTrigger 源码行为
 
 Pheromone ImmediateTrigger 的 action_for_new_object：

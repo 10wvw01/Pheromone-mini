@@ -127,6 +127,11 @@ pm_data_status_t pm_data_ref_map_readonly(
     const pm_data_ref_t *ref,
     const void **address,
     size_t *length);
+
+/* Release a mapping acquired by map_readonly; reference ownership is unchanged. */
+void pm_data_ref_unmap_readonly(
+    const pm_data_ref_t *ref,
+    const void *address);
 ```
 
 ## C.4 Event Trigger 与 Router 接口

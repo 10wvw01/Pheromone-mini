@@ -1,0 +1,90 @@
+{
+  "app_name": "smc_demo",
+  "description": "单节点单进程数据驱动示例",
+  "version": "1.0.0",
+  "functions": [
+    {
+      "name": "producer.so",
+      "description": "接收输入并生成下一阶段对象",
+      "version": "1.0.0",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 128,
+        "timeout_ms": 5000,
+        "gpu": {
+          "required": false,
+          "device_count": 0,
+          "memory_mb": 0
+        },
+        "disk_mb": 0,
+        "network_mbps": 0
+      },
+      "execution": {
+        "type": "coroutine",
+        "priority": 0,
+        "affinity": [],
+        "max_concurrency": 0,
+        "reuse": false
+      }
+    },
+    {
+      "name": "processor.so",
+      "description": "消费处理结果",
+      "version": "1.0.0",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 256,
+        "timeout_ms": 10000,
+        "gpu": {
+          "required": false,
+          "device_count": 0,
+          "memory_mb": 0
+        },
+        "disk_mb": 0,
+        "network_mbps": 0
+      },
+      "execution": {
+        "type": "coroutine",
+        "priority": 0,
+        "affinity": [],
+        "max_concurrency": 0,
+        "reuse": false
+      }
+    }
+  ],
+  "buckets": [
+    "b_input",
+    "b_shared",
+    "b_result"
+  ],
+  "triggers": [
+    {
+      "bucket": "b_input",
+      "trigger_name": "t_input_immediate",
+      "primitive_type": "IMMEDIATE",
+      "primitive": {
+        "function": "producer.so"
+      },
+      "trigger_option": 0
+    },
+    {
+      "bucket": "b_shared",
+      "trigger_name": "t_shared_immediate",
+      "primitive_type": "IMMEDIATE",
+      "primitive": {
+        "function": "processor.so"
+      },
+      "trigger_option": 0
+    },
+    {
+      "bucket": "b_shared",
+      "trigger_name": "t_shared_byname_ready",
+      "primitive_type": "BY_NAME",
+      "primitive": {
+        "function": "processor.so",
+        "key_name": "ready"
+      },
+      "trigger_option": 1
+    }
+  ]
+}

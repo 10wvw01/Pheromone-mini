@@ -1,17 +1,25 @@
-# V0.4 设计文档导航
+# V0.5 设计文档导航
 
-**唯一现行主文档：[V0.4 完整软件设计方案](V0.4-完整软件设计方案.md)**
+**唯一现行主文档：[V0.5 完整软件设计方案](V0.5-完整软件设计方案.md)**
+
+V0.5 采用单一 app.json 注册、Immediate / ByName 两种 Trigger、Inline / Shared-Memory 两种事件数据载体。DIRECT Dependency 不在本期实现。Task Coroutine Pool 和 Data Bucket SDK 的底层实现分别由下游、上游团队负责。
 
 | 部分 | 章节 | 文档 |
 |---|---|---|
-| 总体设计 | 1–3 | [01-总体设计](01-总体设计.md) |
-| 核心模块详细设计 | 4–10 | [02-核心模块详细设计](02-核心模块详细设计.md) |
-| 接口与协作设计 | 11–14 | [03-接口与协作设计](03-接口与协作设计.md) |
-| 工程实现设计 | 15–18 | [04-工程实现设计](04-工程实现设计.md) |
-| 需求追踪与测试验收 | 19–21 | [05-需求追踪与测试验收](05-需求追踪与测试验收.md) |
+| 总体设计 | 1–3 | [01-总体设计](v0.5/01-总体设计.md) |
+| 核心模块详细设计 | 4–10 | [02-核心模块详细设计](v0.5/02-核心模块详细设计.md) |
+| 接口与协作设计 | 11–14 | [03-接口与协作设计](v0.5/03-接口与协作设计.md) |
+| 工程实现设计 | 15–18 | [04-工程实现设计](v0.5/04-工程实现设计.md) |
+| 需求追踪与测试验收 | 19–21 | [05-需求追踪与测试验收](v0.5/05-需求追踪与测试验收.md) |
 
-附录：[A 源码映射](appendix/A-Pheromone源码映射.md)；[B JSON 规范及示例](appendix/B-JSON配置协议示例.md)；[C 公共 C 接口与业务示例](appendix/C-C接口与Task-ABI.md)；[D 数据结构和错误码](appendix/D-数据结构与错误码.md)。
+附录：[A Pheromone 源码映射](v0.5/appendix/A-Pheromone源码映射.md)；[B 单一 app.json](v0.5/appendix/B-JSON配置协议示例.md)；[C C 接口与 Task ABI](v0.5/appendix/C-C接口与Task-ABI.md)；[D 数据结构与错误码](v0.5/appendix/D-数据结构与错误码.md)。
 
-JSON 实例：[app.json](examples/app.json)、[function.json](examples/function.json)。原始附件格式及示例见附录 B。C 接口草案另以 [task_scheduler.h](examples/task_scheduler.h) 提供，C 示例用于说明对接而非交付实现。
+唯一配置示例：[app.json](v0.5/examples/app.json)。C ABI 和 SO 示例：[task_scheduler.h](v0.5/examples/task_scheduler.h)、[producer.c](v0.5/examples/producer.c)、[processor.c](v0.5/examples/processor.c)。
 
-P0：Demo 必须实现；P1：可选，不计入本期准入；预留：无实现、无测试要求；待冻结：与上下游协商的推荐接口。V0.3 已停止作为现行设计使用，历史见主文档。
+**V0.5 研发边界：**
+- 本模块：App Registry、Event Trigger、Task Builder、Task Router。
+- 上游：Data Bucket SDK、Object 存储、1KB 阈值策略、Inline/Shared-Memory 载体选择。
+- 下游：Task Coroutine Pool、TaskQueue、协程唤醒、SO 加载与 handler 执行。
+- 队列满：只打印进程间分发需求日志，不执行真实分发。
+
+V0.4 历史版本：[V0.4 主文档](V0.4-完整软件设计方案.md)；V0.3 历史快照见 [固定提交](https://github.com/10wvw01/Pheromone-mini/tree/06f21152de6be9cad18c1dc792a2fe3dc4b15069/docs)。

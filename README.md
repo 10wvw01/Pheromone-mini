@@ -6,6 +6,7 @@
 
 - [V0.5 完整软件设计方案（主文档）](docs/V0.5-完整软件设计方案.md)
 - [V0.5 五大部分、21 章与附录导航](docs/README.md)
+- [V0.5 分功能需求列表](docs/v0.5/06-分功能需求列表.md)
 - [V0.5 单一 app.json 示例](docs/v0.5/examples/app.json)
 - [V0.4 历史设计基线](docs/V0.4-完整软件设计方案.md)
 - [V0.3 历史快照](https://github.com/10wvw01/Pheromone-mini/tree/06f21152de6be9cad18c1dc792a2fe3dc4b15069/docs)

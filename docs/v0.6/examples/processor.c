@@ -21,7 +21,7 @@ int handler(const pm_task_context_t *ctx)
     output_value = input_value * 2U;
 
     return ctx->send_object(
-        ctx->object_ctx,
+        ctx,
         "b_result",
         "processed",
         &output_value,

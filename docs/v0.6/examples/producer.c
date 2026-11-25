@@ -19,9 +19,9 @@ int handler(const pm_task_context_t *ctx)
     memcpy(&input_value, ctx->value, sizeof(input_value));
     output_value = input_value + 1U;
 
-    /* SDK emits DataReadyEvent only after successful Commit. */
+    /* SDK reads ctx->source_function and emits DataReadyEvent after Commit. */
     return ctx->send_object(
-        ctx->object_ctx,
+        ctx,
         "b_shared",
         "ready",
         &output_value,

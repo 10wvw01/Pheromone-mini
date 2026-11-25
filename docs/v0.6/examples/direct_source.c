@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 
-/* The SDK injects source_function=direct_source.so from this TaskContext. */
+/* Pool sets source_function=direct_source.so in this TaskContext. */
 int handler(const pm_task_context_t *ctx)
 {
     uint32_t input_value;
@@ -21,7 +21,7 @@ int handler(const pm_task_context_t *ctx)
 
     /* This Commit follows the DIRECT dependency declared in app.json. */
     return ctx->send_object(
-        ctx->object_ctx,
+        ctx,
         "b_direct_output",
         "direct_result",
         &output_value,

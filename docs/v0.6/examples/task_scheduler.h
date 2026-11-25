@@ -13,13 +13,14 @@ typedef enum {
 } pm_input_mode_t;
 
 typedef int (*pm_object_send_fn)(
-    void *object_ctx,
+    const pm_task_context_t *task_ctx,
     const char *bucket,
     const char *key,
     const void *data,
     size_t size);
 
 struct pm_task_context {
+    const char *source_function;
     const char *session_id;
     pm_input_mode_t input_mode;
     const char *key;

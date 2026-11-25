@@ -1,6 +1,6 @@
 # 附录 C：公共 C 接口与 Task ABI
 
-本附录是 V0.6 C11 接口草案。DataRef 的真实二进制表示由 Data SDK 提供；此处的 token 仅用于表达不透明句柄，不规定其内部布局。
+本附录中的代码片段按章节顺序拼接后构成 C11 头文件草案。DataRef 的真实二进制表示由 Data SDK 提供；此处 token 仅用于表达不透明句柄，不规定其内部布局。
 
 ## C.1 基本类型
 
@@ -14,7 +14,6 @@
 typedef struct pm_registry pm_registry_t;
 typedef struct pm_task_context pm_task_context_t;
 
-/* Placeholder ABI handle. Data SDK owns the real opaque representation. */
 typedef struct {
     uint64_t opaque_token;
 } pm_data_ref_t;
@@ -56,6 +55,13 @@ typedef enum {
 } pm_task_payload_type_t;
 
 typedef enum {
+    PM_POOL_REGISTER_OK = 0,
+    PM_POOL_REGISTER_INVALID = 1,
+    PM_POOL_REGISTER_CONFLICT = 2,
+    PM_POOL_REGISTER_ERROR = 3
+} pm_pool_register_result_t;
+
+typedef enum {
     PM_POOL_ACCEPTED = 0,
     PM_POOL_NO_CAPACITY = 1,
     PM_POOL_NOT_READY = 2,
@@ -71,8 +77,6 @@ typedef enum {
     PM_ROUTE_REJECTED = 4,
     PM_ROUTE_ERROR = 5
 } pm_route_result_t;
-
-#endif
 ~~~
 
 ## C.2 静态 Function 配置
@@ -104,7 +108,7 @@ typedef struct {
 } pm_function_runtime_config_t;
 ~~~
 
-不包含执行超时字段。Pool 在注册阶段接收一次，后续 Task 不重复携带。
+不包含执行超时字段。Pool 在注册阶段接收一次，后续 Task 不重复携带。Pool 必须在注册接口返回前复制所有字符串和数组内容。
 
 ## C.3 DataReadyEvent
 
@@ -113,9 +117,6 @@ typedef struct {
     const char *bucket;
     const char *key;
     const char *session_id;
-
-    /* Required for Function-originated writes when DIRECT routing applies.
-       NULL is allowed for external SMC Actor writes. */
     const char *source_function;
 
     pm_event_payload_type_t payload_type;
@@ -132,7 +133,7 @@ typedef struct {
 } pm_data_ready_event_t;
 ~~~
 
-不包含 app_name、event_id、trigger_name、target_function、trigger_option、IP 或 RPC 地址。Data SDK 在通知调用期间借用事件和 Inline 缓冲区；调用返回后可以释放 Inline 缓冲区。
+source_function 在 Function handler 写对象时由 SDK 从 TaskContext 注入；外部 SMC Actor 写入可为 NULL。不包含 app_name、event_id、trigger_name、target_function、trigger_option、IP 或 RPC 地址。Data SDK 在通知调用期间借用事件和 Inline 缓冲区；调用返回后可以释放 Inline 缓冲区。
 
 ## C.4 TaskInvocation
 
@@ -140,7 +141,6 @@ typedef struct {
 typedef struct {
     const char *so_name;
     const char *session_id;
-
     pm_input_mode_t input_mode;
     const char *key;
 
@@ -173,9 +173,9 @@ typedef struct {
 
 typedef struct {
     void *ctx;
-    pm_pool_submit_result_t (*register_function)(
+    pm_pool_register_result_t (*register_function)(
         void *ctx, const pm_function_runtime_config_t *config);
-    pm_pool_submit_result_t (*unregister_function)(
+    pm_pool_register_result_t (*unregister_function)(
         void *ctx, const char *so_name);
     pm_pool_submit_result_t (*try_enqueue)(
         void *ctx, const pm_task_invocation_t *task);
@@ -213,23 +213,25 @@ void pm_registry_destroy(pm_registry_t *registry);
 ## C.6 Task Pool 接收语义
 
 - register_function：注册阶段调用，传递 so_name、resource、execution；重复相同配置应幂等。
-- unregister_function：仅用于 App 注册事务失败时回滚本次注册；若 SO 被其他已注册 App 引用，不得提前注销。
+- unregister_function：仅用于 App 注册事务失败时回滚；若 SO 被其他已注册 App 引用，不得提前注销。
+- register / unregister 使用 pm_pool_register_result_t；try_enqueue 使用 pm_pool_submit_result_t。
 - try_enqueue：原子容量检查和入队。
 - ACCEPTED：Pool 在返回前复制描述符和 Inline 字节，并接管一份 DataRef。
 - NO_CAPACITY / NOT_READY / INVALID_TASK / ERROR：Pool 不保留指针、不复制数据、不接管 DataRef。
-- Pool 内部负责队列消费和协程唤醒；本模块不调用 wake_one。
+- Pool 内部负责队列消费和协程唤醒；本模块不调用单独唤醒接口。
 
-## C.7 Handler ABI
+## C.7 Handler ABI 与 Object API
 
 ~~~c
 typedef int (*pm_object_send_fn)(
-    void *object_ctx,
+    const pm_task_context_t *task_ctx,
     const char *bucket,
     const char *key,
     const void *data,
     size_t size);
 
 struct pm_task_context {
+    const char *source_function;
     const char *session_id;
     pm_input_mode_t input_mode;
     const char *key;
@@ -242,7 +244,7 @@ struct pm_task_context {
 int handler(const pm_task_context_t *ctx);
 ~~~
 
-每个 SO 固定导出 handler，函数无状态。TaskContext 和 value 视图仅在 handler 调用期间有效。APP 只通过 Object API 交换数据，不使用文件 I/O 或网络 Socket 作为旁路数据通道。
+Pool 根据 TaskInvocation.so_name 填充 TaskContext.source_function；Object SDK 从该字段注入函数输出事件。TaskContext 和 value 视图仅在 handler 调用期间有效。APP 只通过 Object API 交换数据，不使用文件 I/O 或网络 Socket 作为旁路数据通道。
 
 ## C.8 所有权矩阵
 
@@ -258,3 +260,7 @@ int handler(const pm_task_context_t *ctx);
 | handler 结束 | Pool 释放副本 | Pool unmap 并 release |
 
 KEY_ONLY 不复制 Inline，不 retain DataRef，payload_type=PM_TASK_PAYLOAD_NONE。
+
+~~~c
+#endif /* PHEROMONE_MINI_V06_API_H */
+~~~

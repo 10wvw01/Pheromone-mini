@@ -1,0 +1,149 @@
+{
+  "app_name": "smc_demo",
+  "description": "单节点单进程数据驱动示例",
+  "version": "0.6.0",
+  "scheduler": {
+    "delay_queue": {
+      "enabled": true,
+      "retry_interval_ms": 10,
+      "max_wait_ms": 1000
+    }
+  },
+  "functions": [
+    {
+      "so_name": "producer.so",
+      "description": "处理输入并产生普通 Bucket 数据",
+      "version": "1.0.0",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 128,
+        "gpu": {
+          "required": false,
+          "device_count": 0,
+          "memory_mb": 0
+        },
+        "disk_mb": 0,
+        "network_mbps": 0
+      },
+      "execution": {
+        "type": "coroutine",
+        "priority": 0,
+        "affinity": [],
+        "max_concurrency": 0,
+        "reuse": false
+      }
+    },
+    {
+      "so_name": "processor.so",
+      "description": "消费 Bucket Trigger 输入",
+      "version": "1.0.0",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 256,
+        "gpu": {
+          "required": false,
+          "device_count": 0,
+          "memory_mb": 0
+        },
+        "disk_mb": 0,
+        "network_mbps": 0
+      },
+      "execution": {
+        "type": "coroutine",
+        "priority": 0,
+        "affinity": [],
+        "max_concurrency": 0,
+        "reuse": false
+      }
+    },
+    {
+      "so_name": "direct_source.so",
+      "description": "DIRECT 依赖来源函数",
+      "version": "1.0.0",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 128,
+        "gpu": {
+          "required": false,
+          "device_count": 0,
+          "memory_mb": 0
+        },
+        "disk_mb": 0,
+        "network_mbps": 0
+      },
+      "execution": {
+        "type": "coroutine",
+        "priority": 0,
+        "affinity": [],
+        "max_concurrency": 0,
+        "reuse": false
+      }
+    },
+    {
+      "so_name": "direct_processor.so",
+      "description": "DIRECT 依赖目标函数",
+      "version": "1.0.0",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 128,
+        "gpu": {
+          "required": false,
+          "device_count": 0,
+          "memory_mb": 0
+        },
+        "disk_mb": 0,
+        "network_mbps": 0
+      },
+      "execution": {
+        "type": "coroutine",
+        "priority": 0,
+        "affinity": [],
+        "max_concurrency": 0,
+        "reuse": false
+      }
+    }
+  ],
+  "buckets": [
+    "b_input",
+    "b_shared",
+    "b_direct_output",
+    "b_result"
+  ],
+  "dependencies": [
+    {
+      "type": "DIRECT",
+      "src_functions": ["direct_source.so"],
+      "tgt_functions": ["direct_processor.so"]
+    }
+  ],
+  "triggers": [
+    {
+      "bucket": "b_input",
+      "trigger_name": "t_input_immediate",
+      "primitive_type": "IMMEDIATE",
+      "primitive": {
+        "function": "producer.so"
+      },
+      "trigger_option": 0
+    },
+    {
+      "bucket": "b_shared",
+      "trigger_name": "t_shared_immediate",
+      "primitive_type": "IMMEDIATE",
+      "primitive": {
+        "function": "processor.so"
+      },
+      "trigger_option": 0
+    },
+    {
+      "bucket": "b_shared",
+      "trigger_name": "t_shared_byname_ready",
+      "primitive_type": "BY_NAME",
+      "primitive": {
+        "function": "processor.so",
+        "key_name": "ready"
+      },
+      "trigger_option": 1
+    }
+  ]
+}

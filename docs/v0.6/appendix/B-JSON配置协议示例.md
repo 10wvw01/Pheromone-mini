@@ -2,7 +2,7 @@
 
 ## B.1 配置原则
 
-V0.6 仅保留 app.json。该文件统一描述 App、Function、DIRECT Dependency、Bucket、Trigger 和全局 Delay Queue。
+V0.6 仅保留 app.json。该文件统一描述 App、Function、DIRECT Dependency、Bucket、Trigger 和全局 Delay Queue。scheduler.delay_queue 是进程级单例配置：首个成功注册的 App 建立该配置，后续 App 必须重复声明完全相同的三个字段；不一致时注册失败。
 
 - 不使用 function.json。
 - app_name 是 App Registry 全局唯一注册 KEY。
@@ -179,6 +179,8 @@ V0.6 仅保留 app.json。该文件统一描述 App、Function、DIRECT Dependen
 | scheduler.delay_queue.enabled | boolean | 必填 |
 | scheduler.delay_queue.retry_interval_ms | integer | 必填且大于 0 |
 | scheduler.delay_queue.max_wait_ms | integer | 必填且大于 0，且不小于 retry_interval_ms |
+
+三个 scheduler.delay_queue 字段在进程级全局生效。多个 App 的 app.json 必须声明相同配置；不允许每个 App 单独设置不同的 Delay Queue 策略。
 | functions | array | 必填，至少一个 |
 | buckets | array(string) | 必填；跨 App 全局唯一 |
 | dependencies | array(object) | 可为空；仅 DIRECT |

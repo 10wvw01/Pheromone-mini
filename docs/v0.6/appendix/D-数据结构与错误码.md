@@ -145,10 +145,11 @@ Payload Type 由 Data SDK 决定；Input Mode 由 DIRECT 规则或 Trigger Optio
 | -13 | PM_ERR_REGISTRY_SEALED | Registry 已 seal |
 | -14 | PM_ERR_POOL_REGISTER | Pool 静态 Function 注册失败 |
 | -15 | PM_ERR_INTERNAL | 内部不变量破坏 |
+| -16 | PM_ERR_GLOBAL_SCHEDULER_CONFIG_CONFLICT | 后续 App 的进程级 Delay Queue 配置与首个成功注册的配置不一致 |
 
 ## D.9 Delay Queue 配置和状态
 
-Delay Queue 为全局配置：
+Delay Queue 为进程级全局配置：首个成功注册的 App 建立配置，后续 App 必须声明完全相同的配置。具体字段：
 
 - enabled：是否启用。
 - retry_interval_ms：两次提交尝试的最小间隔。

@@ -34,7 +34,8 @@ typedef enum {
     PM_ERR_NO_MEMORY = -12,
     PM_ERR_REGISTRY_SEALED = -13,
     PM_ERR_POOL_REGISTER = -14,
-    PM_ERR_INTERNAL = -15
+    PM_ERR_INTERNAL = -15,
+    PM_ERR_GLOBAL_SCHEDULER_CONFIG_CONFLICT = -16
 } pm_status_t;
 
 typedef enum {

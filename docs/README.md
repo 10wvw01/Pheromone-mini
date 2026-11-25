@@ -2,7 +2,7 @@
 
 **当前唯一有效设计基线：[V0.6 完整软件设计方案](V0.6-完整软件设计方案.md)**
 
-V0.6 采用单一 app.json、DIRECT 独立依赖路径、Immediate / ByName 两种 Bucket Trigger、全局唯一 Bucket 索引、最小 DataReadyEvent、精简 TaskInvocation、原子 try_enqueue 和全局 Delay Queue。不实现 Rerun、单次执行超时、wake_one、跨进程或跨节点调度。
+V0.6 采用单一 app.json、DIRECT 独立依赖路径、Immediate / ByName 两种 Bucket Trigger、全局唯一 Bucket 索引、最小 DataReadyEvent、精简 TaskInvocation、原子 try_enqueue 和进程级全局 Delay Queue（多 App 配置必须一致）。不实现 Rerun、单次执行超时、wake_one、跨进程或跨节点调度。
 
 ## V0.6 文档
 

@@ -1,134 +1,114 @@
 # 附录 D：数据结构、状态与错误码
 
-## D.1 核心数据对象关系
+以 [公共头文件](../examples/task_scheduler.h) 和第 11 章为对外契约草案。内部类型不构成外部 ABI。
+
+## D.1 核心对象关系
 
 ```mermaid
 classDiagram
     class DataReadyEvent {
       event_id
-      bucket_id
-      key
-      session_id
-      source_function_id
-      target_function_id
-      DataRef
+      app_name
+      bucket / key / session_id
+      src_function / tgt_function
+      data_ref
     }
     class TaskAction {
-      route_kind
-      target_function_id
-      trigger_id
+      source_type
+      target
+      trigger_name
       input_mode
-      DataRef
+      event (borrowed)
     }
     class TaskDescriptor {
-      task_id
-      config_generation
-      function_id
-      so_path
-      handler_symbol
-      inputs[]
-      resource
+      task_id / event_id
+      task_name / so_path / entry
+      resource / execution
+      input
     }
     class DataRef {
-      object_id
-      generation
-      region_id
-      offset
-      length
-      owner_node_id
+      opaque SDK value
     }
     DataReadyEvent --> TaskAction
     TaskAction --> TaskDescriptor
     DataReadyEvent --> DataRef
-    TaskAction --> DataRef
     TaskDescriptor --> DataRef
 ```
 
+内部 function_config_t 持有已规范化 name、so_path、entry、version、resource、execution；config model 保存 description。trigger_config_t 持有 type（TRIGGER_IMMEDIATE / TRIGGER_BY_NAME）、bucket、trigger_name、target、key_name、option。task_action_t 持有目标配置和 event 的借用指针；只在 notify 内有效。event_trigger_t 持有 Registry、scheduler_adapters_t 和原子 task_id 计数器。均由实现阶段定义在 private 头文件。
+
 ## D.2 DataRef 生命周期
 
-DataRef 是共享数据对象的逻辑引用。引用计数必须由 Data SDK 管理，Scheduler 只调用 retain/release，不直接修改共享内存元数据。
-
-| 阶段 | 持有方 | 动作 |
+| 阶段 | 持有方 | 处理 |
 |---|---|---|
-| 数据写入中 | Data SDK | 分配对象、写 Payload |
-| Commit 成功 | Data SDK | 发布对象 generation 和 DataRef |
-| DataReadyEvent 入队 | Data SDK / Event Queue | 保证事件可重试且引用有效 |
-| Scheduler 消费事件 | Event Consumer | 校验 DataRef，按 Task 数量 retain |
-| Task 构建成功 | Task Router | 持有 TaskDescriptor 及输入引用 |
-| Pool 返回 ACCEPTED | Task Coroutine Pool | 接管 TaskDescriptor 和引用 |
-| Pool 执行中 | Task Coroutine Pool | 保证引用不被回收 |
-| Task 完成/取消 | Task Coroutine Pool | release 所有输入引用 |
-| 投递失败 | Scheduler | 释放未转移引用 |
+| 已 Commit，通知前 | SDK | 保持基础引用有效 |
+| notify 匹配 | SDK | Event Trigger 借用基础引用，不释放 |
+| 每项 Builder 成功 | Router | retain 一份 |
+| Pool 接收 | Pool | 复制描述符，接管该份引用 |
+| Pool 拒绝 | Router | release 本次 retain，池未接管 |
+| notify 返回 | SDK | 根据 SDK 契约释放基础引用 |
+| 执行完成/失败/取消 | Pool | 解除映射，release 每个接管引用 |
 
-若一个事件生成 N 个 Task，Scheduler 必须为 N 个 Task 分别 retain。不能只 retain 一次再把同一个计数引用交给多个 Task。
+fan-out N 个 Task 时 N 次 retain，不共用一份计数；拒绝不会释放 SDK 的基础引用。TaskContext 和映射视图在 handler 返回后失效。已入队的描述符无 Registry 借用指针，engine 销毁不会直接使其失效；SDK 引用服务必须持续到所有池引用释放。
 
-## D.3 所有权矩阵
+## D.3 对象所有权矩阵
 
-| 对象 | 创建方 | 使用方 | 释放方 |
+| 对象 | 所有者 | 有效期 |
+|---|---|---|
+| Registry | engine | init 成功至 destroy |
+| DataReadyEvent | SDK 调用者 | notify 返回前 |
+| TaskAction | notify 栈 | 当前处理项 |
+| TaskDescriptor 栈副本 | Builder/Router | try_submit 返回前 |
+| TaskDescriptor 池副本 | Pool | 接收到执行清理 |
+| TriggerResult.items | notify 调用者 | 调用者管理 |
+| TaskContext | Pool | handler 调用期间 |
+| SDK/Pool ctx | 各团队 | 覆盖所有回调及已接收 Task |
+
+## D.4 事件级错误码
+
+| 值 | 枚举 | 语义 |
+|---:|---|---|
+| 0 | ET_OK | 事件处理完毕，检查逐项结果 |
+| -1 | ET_ERR_INVALID_ARGUMENT | 参数/格式非法 |
+| -2 | ET_ERR_CONFIG | 配置加载或校验失败 |
+| -3 | ET_ERR_UNKNOWN_APP | app 不匹配 |
+| -4 | ET_ERR_UNKNOWN_BUCKET | 未声明普通 Bucket |
+| -5 | ET_ERR_UNKNOWN_SOURCE | 非空源函数未注册 |
+| -6 | ET_ERR_INVALID_DEPENDENCY | 显式目标无合法 DIRECT 边 |
+| -7 | ET_ERR_DATA_REF | validate 或 retain 失败（retain 为单项错误） |
+| -8 | ET_ERR_RESULT_CAPACITY | 结果容量不足，count=所需项数，未投递 |
+| -9 | ET_ERR_NO_MEMORY | 初始化或构建内存不足 |
+| -10 | ET_ERR_INTERNAL | 内部不变量破坏/ID 耗尽等 |
+
+事件级校验或容量失败发生在任何投递前。构建失败则写入单项 status，route=ROUTE_NOT_ATTEMPTED，不将已发生的部分成功覆盖为事件级错误。init 失败 *out=NULL；notify 在 result 指针有效时重置输出计数（保留 items/capacity）。ET_ERR_RESULT_CAPACITY 仅 count 返回所需数，其他计数为 0。
+
+## D.5 Pool 与 Router 状态
+
+| Pool 返回 | Router 返回 | 已入队 | 计数 |
 |---|---|---|---|
-| RegistrySnapshot | Config Loader | 全部 Scheduler 模块只读 | Scheduler 主生命周期 |
-| DataReadyEvent | Data SDK | Event Trigger | Data SDK/队列协议确认 |
-| DataRef 对象 | Data SDK | Scheduler / Task Pool | Data SDK |
-| TaskAction | Event Trigger | Task Builder | Event Trigger 处理结束 |
-| TaskDescriptor | Task Builder | Router → Pool | 当前所有者 |
-| RouteResult | Router | Event Trigger / 日志 | 调用方 |
-| TaskContext | Task Pool | Handler 借用 | Task Pool |
+| POOL_SUBMIT_OK | ROUTE_LOCAL_OK (0) | 是 | enqueued |
+| POOL_QUEUE_FULL | ROUTE_PROCESS_REQUIRED (1) | 否，仅日志 | overflow |
+| POOL_NOT_READY / POOL_RESOURCE_UNAVAILABLE | ROUTE_POOL_UNAVAILABLE (2) | 否 | failed |
+| POOL_INVALID_TASK | ROUTE_INVALID_TASK (3) | 否 | failed |
+| POOL_INTERNAL_ERROR | ROUTE_ERROR (4) | 否 | failed |
+| 未构建成功 | ROUTE_NOT_ATTEMPTED (5) | 否 | failed |
 
-## D.4 Task 状态机
+ET_OK 时 count=matched=enqueued+overflow+failed；item.status 是构建结果，构建成功为 ET_OK，最终是否接收由 item.route 决定。零匹配不是错误。部分成功不回滚。PROCESS_REQUIRED 不等于已经分发，所有失败均明确未接收。错误后的业务重试不自动执行。
+
+## D.6 Task 状态与去重边界
 
 ```mermaid
 stateDiagram-v2
-    [*] --> CREATED
-    CREATED --> ROUTING
-    ROUTING --> NODE_SELECTED
-    NODE_SELECTED --> PROCESS_SELECTED
-    PROCESS_SELECTED --> QUEUED
-    ROUTING --> REJECTED
-    NODE_SELECTED --> REJECTED
-    PROCESS_SELECTED --> REJECTED
+    [*] --> MATCHED
+    MATCHED --> BUILT
+    MATCHED --> REJECTED
+    BUILT --> QUEUED
+    BUILT --> REJECTED
     QUEUED --> RUNNING
+    QUEUED --> CANCELLED
     RUNNING --> SUCCEEDED
     RUNNING --> FAILED
     RUNNING --> CANCELLED
-    REJECTED --> [*]
-    SUCCEEDED --> [*]
-    FAILED --> [*]
-    CANCELLED --> [*]
 ```
 
-Scheduler 主要负责 CREATED 至 QUEUED；Task Pool 负责 QUEUED 至终态。若远程 Node Transport 尚未确认目标接收，任务状态应保持 ROUTING，不得提前标记 QUEUED。
-
-## D.5 错误码建议
-
-| 错误码 | 名称 | 是否可重试 | 含义 |
-|---:|---|---|---|
-| 0 | PM_OK | 否 | 成功 |
-| 1 | PM_DUPLICATE_EVENT | 否 | 去重窗口内重复事件 |
-| 2 | PM_NO_TRIGGER_MATCH | 否 | 无匹配 Trigger，正常未命中 |
-| -1 | PM_ERR_INVALID_ARGUMENT | 否 | 参数为空或格式错误 |
-| -2 | PM_ERR_CONFIG | 否 | 配置解析/校验失败 |
-| -3 | PM_ERR_DATA_REF | 视情况 | DataRef 无效或过期 |
-| -4 | PM_ERR_NO_DEPENDENCY | 否 | 显式 DIRECT 事件找不到依赖 |
-| -5 | PM_ERR_DEPENDENCY_TARGET_MISMATCH | 否 | 指定目标不属于依赖集合 |
-| -6 | PM_ERR_NO_NODE_CAPACITY | 是 | 无可用节点 |
-| -7 | PM_ERR_NO_PROCESS_CAPACITY | 是 | 无可用进程 |
-| -8 | PM_ERR_QUEUE_FULL | 是 | Task Pool 队列满 |
-| -9 | PM_ERR_POOL_STOPPING | 是 | Task Pool 正在停止 |
-| -10 | PM_ERR_NO_MEMORY | 是 | 内存分配失败 |
-| -11 | PM_ERR_UNSUPPORTED_TRIGGER | 否 | 当前版本不支持该 Trigger |
-
-实现时错误码需映射到模块内部更细的诊断原因，但对外保持稳定。
-
-## D.6 去重键与边界
-
-推荐去重键：
-- DIRECT：event_id + source_function_id + target_function_id。
-- ImmediateTrigger：event_id + trigger_id + target_function_id。
-
-去重表只记录本进程已成功提交或正在提交的组合。失败提交应允许重试；并发提交时先占位，提交结果确认后更新状态。记录 TTL 和容量必须配置化。
-
-该机制只能降低同一进程生命周期内的重复投递，不等价于持久化 exactly-once。若 Data SDK 会跨进程重放事件，仍需要持久化去重或 Task 状态服务。
-
-## D.7 配置与运行状态
-
-RegistrySnapshot 带 config_generation；TaskDescriptor 固化生成时的代数。配置升级后，新事件使用新代数，已构建 Task 继续使用旧版本的 SO/元信息，直到其完成。V0.3 通过重启加载配置，不实现在线切换。
+本模块责任到 QUEUED；之后由 Pool 负责。P0 不存运行中/已完成任务表，也不保证事件去重。可选 P1 去重的键与 RESERVED/ACCEPTED 状态见第 15 章；未实施时不得宣传安全全量重放或 exactly-once。

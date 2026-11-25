@@ -1,0 +1,61 @@
+{
+  "app_name": "smc_demo",
+  "description": "单进程数据驱动示例",
+  "version": "1.0.0",
+  "functions": [
+    {
+      "name": "producer.so",
+      "description": "将输入整数加一并输出",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 128,
+        "timeout_ms": 5000
+      }
+    },
+    {
+      "name": "processor.so",
+      "description": "消费整数",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 256,
+        "timeout_ms": 10000
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "src_functions": [
+        "producer.so"
+      ],
+      "tgt_functions": [
+        "processor.so"
+      ],
+      "type": "DIRECT"
+    }
+  ],
+  "triggers": [
+    {
+      "bucket": "b_input",
+      "trigger_name": "t_immediate_producer",
+      "primitive_type": "IMMEDIATE",
+      "primitive": {
+        "function": "producer.so"
+      },
+      "trigger_option": 0
+    },
+    {
+      "bucket": "b_named",
+      "trigger_name": "t_byname_processor",
+      "primitive_type": "BY_NAME",
+      "primitive": {
+        "function": "processor.so",
+        "key_name": "input"
+      },
+      "trigger_option": 0
+    }
+  ],
+  "buckets": [
+    "b_input",
+    "b_named"
+  ]
+}

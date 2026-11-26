@@ -63,9 +63,9 @@ EventTriggerNotify 独立接收 sourceFuncName、dataAddr、dataSize。外部 Ac
 | SessionID | 是 | 业务 Session |
 | Function.SOName | 是 | 下游识别的 SO 文件名 |
 | Function.FuncName | 是 | 目标函数标识 |
-| Function.Resource | 是 | 完整 CPU / Memory / GPU / Disk / Network 静态资源需求；Router 本期只检查 CPU / Memory |
+| Function.Resource | 是 | 完整 CPU / Memory / GPU / Disk / Network 静态资源需求；Router 必查 CPU / Memory，按需检查 GPU / Disk / Network |
 | InputMode | 是 | InputValue / InputKeyValue / InputKeyOnly |
-| Args | 是 | 参数数组；当前长度为 1 |
+| Args | 是 | 参数数组；普通触发长度为 1，扩展触发可多项 |
 
 每个 TaskArgument 包含必填 Key、DataAddr 和 DataSize。DataAddr 在 DataSize 大于 0 时必须非空。
 
@@ -135,3 +135,5 @@ Delay Queue 为进程级全局配置。多个 App 声明的配置必须完全相
 每次重试先查到期，再执行资源检查；调用 TryEnqueue 前再次查到期。持续失败按 retry_interval_ms 重试直到 deadline，日志区分具体原因。
 
 时间使用单调时钟。队列达到实现级容量上限时，拒绝新项并释放 Router 持有的元数据。Delay Queue 只重试提交，不重新执行已经进入 Pool 的 Function。
+
+增量设计：[附录 F：扩展触发与资源准入](F-V0.6扩展触发与资源准入.md)。扩展规则可聚合多个通知并生成多项 Args；CPU / Memory 必查，GPU / Disk / Network 按需求检查。现有基础场景及其测试输入保留，新增场景按附录 F 验收。

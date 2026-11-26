@@ -2,7 +2,7 @@
 
 **当前唯一有效设计基线：[V0.6 完整软件设计方案](V0.6-完整软件设计方案.md)**
 
-V0.6 使用 Go 实现。上游仅有 TriggerInit 和 EventTriggerNotify 两个 API；配置仅使用用户自行编写的 app.json，Function 配置内嵌 functions[]；DIRECT 为独立依赖路径；Bucket Trigger 仅支持 Immediate / ByName；下游 Pool 唯一交互为不带 ctx 的 TryEnqueue(TaskInvocation)。
+V0.6 使用 Go 实现。上游仅有 TriggerInit 和 EventTriggerNotify 两个 API；配置仅使用用户自行编写的 app.json，Function 配置内嵌 functions[]；DIRECT 为独立依赖路径；Bucket Trigger 支持 Immediate / ByName 及附录 F 扩展原语；下游 Pool 唯一交互为不带 ctx 的 TryEnqueue(TaskInvocation)。
 
 ## V0.6 文档
 
@@ -34,7 +34,7 @@ V0.6 使用 Go 实现。上游仅有 TriggerInit 和 EventTriggerNotify 两个 A
 - 上游 Data Bucket SDK：对象写入与 Commit、提供 bucket/key/session_id 和数据地址，维护 Session 生命周期；Commit 成功后调用 EventTriggerNotify。
 - 本模块：TriggerInit、JSON 解析与校验、内部 Registry、DIRECT 匹配、Bucket Trigger 匹配、Task Builder、CPU / Memory 预检查和 Delay Queue。
 - 下游 Task Coroutine Pool：只提供 TryEnqueue(TaskInvocation)，自行管理队列、协程调度、SO / Function 加载与执行。
-- app.json 保存 App 级 Bucket / DIRECT / Trigger / Delay Queue 配置，functions[] 内嵌 so_name、func_name 和完整 Resource（CPU / Memory / GPU / Disk / Network）；Task Router 本期只检查 CPU / Memory。
+- app.json 保存 App 级 Bucket / DIRECT / Trigger / Delay Queue 配置，functions[] 内嵌 so_name、func_name 和完整 Resource（CPU / Memory / GPU / Disk / Network）；Task Router 必查 CPU / Memory，按需检查 GPU / Disk / Network。
 - 不实现 DataRef、双数据载体、Pool 静态 Function 注册、Execution 配置、Rerun、跨进程 / 节点调度。
 
 ## 历史版本
@@ -43,3 +43,5 @@ V0.6 使用 Go 实现。上游仅有 TriggerInit 和 EventTriggerNotify 两个 A
 - [V0.4 主文档与配套文件](archive/v0.4/README.md)
 - [V0.3 主文档与配套文件](archive/v0.3/README.md)
 - [归档规则](archive/README.md)
+
+增量设计：[附录 F：扩展触发与资源准入](v0.6/appendix/F-V0.6扩展触发与资源准入.md)。扩展规则可聚合多个通知并生成多项 Args；CPU / Memory 必查，GPU / Disk / Network 按需求检查。现有基础场景及其测试输入保留，新增场景按附录 F 验收。

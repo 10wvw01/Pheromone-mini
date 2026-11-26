@@ -162,3 +162,5 @@ TriggerInit 失败时返回带文件路径、字段路径和底层原因的 erro
 5. Data SDK 保证 Delay Queue 和异步执行期间借用地址有效。
 6. Session 完成判定及数据回收由 Data SDK 管控，本模块不定义完成通知、引用计数或回收协议。
 7. DataAddr 应指向上游管理的共享内存 / mmap 区域，不应指向未固定的 Go Heap 对象。
+
+增量设计：[附录 F：扩展触发与资源准入](F-V0.6扩展触发与资源准入.md)。扩展规则可聚合多个通知并生成多项 Args；CPU / Memory 必查，GPU / Disk / Network 按需求检查。现有基础场景及其测试输入保留，新增场景按附录 F 验收。

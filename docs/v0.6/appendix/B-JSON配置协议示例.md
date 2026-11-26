@@ -4,7 +4,7 @@
 
 V0.6 仅使用 app.json。用户根据本文字段说明和示例自行完成编写，再将文件路径传入 TriggerInit；模块自行读取、解析和校验，不负责生成或自动补写业务配置。
 
-app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger 和 Delay Queue。每项 Function 包含 so_name、func_name、description、version、resource；CPU / Memory 是本期必做准入维度，GPU / Disk / Network 保留为透传元数据。全部初始化成功结束后才允许发送 EventTriggerNotify。
+app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger 和 Delay Queue。每项 Function 包含 so_name、func_name、description、version、resource；CPU / Memory 是本期必做准入维度，GPU / Disk / Network 按任务声明检查并透传。全部初始化成功结束后才允许发送 EventTriggerNotify。
 
 ## B.2 app.json 完整示例
 
@@ -163,8 +163,8 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
 | functions | array(object) | 必填，至少一个 |
 | functions[] | object | 直接包含下表 Function 字段；不接受外部配置路径 |
 | buckets | array(string) | 必填；跨 App 全局唯一 |
-| dependencies | array(object) | 可为空；仅 DIRECT |
-| triggers | array(object) | 可为空；仅 IMMEDIATE / BY_NAME |
+| dependencies | array(object) | 可为空；DIRECT / MANY_TO_ONE / K_OUT_OF_N |
+| triggers | array(object) | 可为空；IMMEDIATE / BY_NAME 及附录 F 扩展原语 |
 
 ### functions[] 每项字段（下列路径均相对该项）
 
@@ -182,13 +182,13 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
 | resource.disk_mb | integer | 可选；默认 0；非负 |
 | resource.network_mbps | integer | 可选；默认 0；非负 |
 
-Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段保留为静态资源元数据，当前不参与 Task Router 的 CPU / Memory 准入判断。
+Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为可选资源需求，由 Task Router 按附录 F 独立进行准入判断。
 
 ### DIRECT Dependency
 
 | 字段 | 类型 | 约束 |
 |---|---|---|
-| type | string | 仅 DIRECT |
+| type | string | DIRECT / MANY_TO_ONE / K_OUT_OF_N |
 | src_functions | array(string) | 必填；恰好一个来源 func_name |
 | tgt_functions | array(string) | 必填；至少一个目标 func_name |
 
@@ -218,7 +218,7 @@ trigger_option：0=Value，1=Key+Value，2=Key Only。DIRECT 不使用 trigger_o
 6. 同一 so_name + func_name 被多个 App 复用时，Resource 必须一致。
 7. 每条 DIRECT 配置必须只有一个 src_functions 项，tgt_functions 至少一个；来源和目标都必须存在。
 8. Trigger 的 Bucket 和目标 func_name 必须存在；trigger_name 在 App 内唯一。
-9. 仅接受 IMMEDIATE / BY_NAME；ByName 必须配置非空 key_name，Immediate 禁止 key_name。
+9. 接受 IMMEDIATE、BY_NAME 及附录 F 扩展原语；ByName 必须配置非空 key_name，Immediate 禁止 key_name。
 10. trigger_option 只允许 0、1、2。
 11. Delay Queue enabled 必须为布尔值；时间间隔和最大等待时间必须为正整数。
 12. 拒绝 execution、resource.timeout_ms、DataRef 和旧的双数据载体字段；Resource 中 GPU、Disk、Network 数值必须非负。
@@ -226,3 +226,5 @@ trigger_option：0=Value，1=Key+Value，2=Key Only。DIRECT 不使用 trigger_o
 14. 所有整数字段无损解析，不经 float64 中转：gpu.device_count 在 uint32 范围，其余无符号资源整数字段在 uint64 范围；拒绝小数、负数或超范围值。CPU 必须为可表示的有限正浮点数。
 15. retry_interval_ms / max_wait_ms 换算 time.Duration 前检查 int64 纳秒上限；memory_mb 换算字节前检查 uint64 上限。超界在 TriggerInit 阶段拒绝，不留到运行时反复延时；运行时样本计算仍做防御检查。
 16. 多 App 的 delay_queue 三项有效配置必须完全一致；不一致拒绝当前 App，不改动已发布 Registry 和进程级延时配置。
+
+增量设计：[附录 F：扩展触发与资源准入](F-V0.6扩展触发与资源准入.md)。扩展规则可聚合多个通知并生成多项 Args；CPU / Memory 必查，GPU / Disk / Network 按需求检查。现有基础场景及其测试输入保留，新增场景按附录 F 验收。

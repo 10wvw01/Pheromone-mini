@@ -104,7 +104,8 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
       ],
       "tgt_functions": [
         "direct_processor"
-      ]
+      ],
+      "trigger_option": 0
     }
   ],
   "triggers": [
@@ -194,6 +195,40 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 | trigger_option | integer | 可选；仅 DIRECT 依赖项支持；0 = Value（默认），1 = Key + Value，2 = Key Only |
 
 来源和目标必须属于同一 App 的 functions。一个来源可对应多个目标；多个来源拆成多条依赖配置。
+
+字段写在 `dependencies[]` 的 DIRECT 对象内。完整 `app.json` 示例显式设置 `0`，目标函数收到 Value。省略字段时效果相同。以下两段配置可分别替换完整示例中的同一条依赖。
+
+**Key + Value（1）**
+
+~~~json
+{
+  "type": "DIRECT",
+  "src_functions": [
+    "direct_source"
+  ],
+  "tgt_functions": [
+    "direct_processor"
+  ],
+  "trigger_option": 1
+}
+~~~
+
+**Key Only（2）**
+
+~~~json
+{
+  "type": "DIRECT",
+  "src_functions": [
+    "direct_source"
+  ],
+  "tgt_functions": [
+    "direct_processor"
+  ],
+  "trigger_option": 2
+}
+~~~
+
+选择 `2` 时，Pool 向目标函数提供 Key。所有目标共用当前依赖项的模式。
 
 ### Bucket 与 Trigger
 

@@ -1,0 +1,10 @@
+{
+  "so_name": "processor.so",
+  "func_name": "processor",
+  "description": "消费 Bucket Trigger 输入",
+  "version": "1.0.0",
+  "resource": {
+    "cpu_cores": 1,
+    "memory_mb": 256
+  }
+}

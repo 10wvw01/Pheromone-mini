@@ -1,0 +1,10 @@
+{
+  "so_name": "direct_processor.so",
+  "func_name": "direct_processor",
+  "description": "DIRECT 依赖的目标函数",
+  "version": "1.0.0",
+  "resource": {
+    "cpu_cores": 1,
+    "memory_mb": 128
+  }
+}

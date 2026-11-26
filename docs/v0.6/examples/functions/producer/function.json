@@ -1,0 +1,10 @@
+{
+  "so_name": "producer.so",
+  "func_name": "producer",
+  "description": "处理输入并产生普通 Bucket 数据",
+  "version": "1.0.0",
+  "resource": {
+    "cpu_cores": 1,
+    "memory_mb": 128
+  }
+}

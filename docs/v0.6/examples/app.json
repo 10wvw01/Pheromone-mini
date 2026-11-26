@@ -11,96 +11,16 @@
   },
   "functions": [
     {
-      "so_name": "producer.so",
-      "description": "处理输入并产生普通 Bucket 数据",
-      "version": "1.0.0",
-      "resource": {
-        "cpu_cores": 1,
-        "memory_mb": 128,
-        "gpu": {
-          "required": false,
-          "device_count": 0,
-          "memory_mb": 0
-        },
-        "disk_mb": 0,
-        "network_mbps": 0
-      },
-      "execution": {
-        "type": "coroutine",
-        "priority": 0,
-        "affinity": [],
-        "max_concurrency": 0,
-        "reuse": false
-      }
+      "config_path": "functions/producer/function.json"
     },
     {
-      "so_name": "processor.so",
-      "description": "消费 Bucket Trigger 输入",
-      "version": "1.0.0",
-      "resource": {
-        "cpu_cores": 1,
-        "memory_mb": 256,
-        "gpu": {
-          "required": false,
-          "device_count": 0,
-          "memory_mb": 0
-        },
-        "disk_mb": 0,
-        "network_mbps": 0
-      },
-      "execution": {
-        "type": "coroutine",
-        "priority": 0,
-        "affinity": [],
-        "max_concurrency": 0,
-        "reuse": false
-      }
+      "config_path": "functions/processor/function.json"
     },
     {
-      "so_name": "direct_source.so",
-      "description": "DIRECT 依赖来源函数",
-      "version": "1.0.0",
-      "resource": {
-        "cpu_cores": 1,
-        "memory_mb": 128,
-        "gpu": {
-          "required": false,
-          "device_count": 0,
-          "memory_mb": 0
-        },
-        "disk_mb": 0,
-        "network_mbps": 0
-      },
-      "execution": {
-        "type": "coroutine",
-        "priority": 0,
-        "affinity": [],
-        "max_concurrency": 0,
-        "reuse": false
-      }
+      "config_path": "functions/direct_source/function.json"
     },
     {
-      "so_name": "direct_processor.so",
-      "description": "DIRECT 依赖目标函数",
-      "version": "1.0.0",
-      "resource": {
-        "cpu_cores": 1,
-        "memory_mb": 128,
-        "gpu": {
-          "required": false,
-          "device_count": 0,
-          "memory_mb": 0
-        },
-        "disk_mb": 0,
-        "network_mbps": 0
-      },
-      "execution": {
-        "type": "coroutine",
-        "priority": 0,
-        "affinity": [],
-        "max_concurrency": 0,
-        "reuse": false
-      }
+      "config_path": "functions/direct_processor/function.json"
     }
   ],
   "buckets": [
@@ -112,8 +32,12 @@
   "dependencies": [
     {
       "type": "DIRECT",
-      "src_functions": ["direct_source.so"],
-      "tgt_functions": ["direct_processor.so"]
+      "src_functions": [
+        "direct_source"
+      ],
+      "tgt_functions": [
+        "direct_processor"
+      ]
     }
   ],
   "triggers": [
@@ -122,7 +46,7 @@
       "trigger_name": "t_input_immediate",
       "primitive_type": "IMMEDIATE",
       "primitive": {
-        "function": "producer.so"
+        "function": "producer"
       },
       "trigger_option": 0
     },
@@ -131,7 +55,7 @@
       "trigger_name": "t_shared_immediate",
       "primitive_type": "IMMEDIATE",
       "primitive": {
-        "function": "processor.so"
+        "function": "processor"
       },
       "trigger_option": 0
     },
@@ -140,7 +64,7 @@
       "trigger_name": "t_shared_byname_ready",
       "primitive_type": "BY_NAME",
       "primitive": {
-        "function": "processor.so",
+        "function": "processor",
         "key_name": "ready"
       },
       "trigger_option": 1

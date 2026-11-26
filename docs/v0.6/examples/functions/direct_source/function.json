@@ -1,0 +1,10 @@
+{
+  "so_name": "direct_source.so",
+  "func_name": "direct_source",
+  "description": "DIRECT 依赖的来源函数",
+  "version": "1.0.0",
+  "resource": {
+    "cpu_cores": 1,
+    "memory_mb": 128
+  }
+}

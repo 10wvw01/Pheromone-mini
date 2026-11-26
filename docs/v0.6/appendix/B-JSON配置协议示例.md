@@ -163,8 +163,8 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
 | functions | array(object) | 必填，至少一个 |
 | functions[] | object | 直接包含下表 Function 字段；不接受外部配置路径 |
 | buckets | array(string) | 必填；跨 App 全局唯一 |
-| dependencies | array(object) | 可为空；DIRECT / MANY_TO_ONE / K_OUT_OF_N |
-| triggers | array(object) | 可为空；IMMEDIATE / BY_NAME 以及集合、投票、条数 / 时间批处理、分组触发原语 |
+| dependencies | array(object) | 可为空；DIRECT |
+| triggers | array(object) | 可为空；IMMEDIATE / BY_NAME |
 
 ### functions[] 每项字段（下列路径均相对该项）
 
@@ -188,7 +188,7 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 
 | 字段 | 类型 | 约束 |
 |---|---|---|
-| type | string | DIRECT / MANY_TO_ONE / K_OUT_OF_N |
+| type | string | DIRECT |
 | src_functions | array(string) | 必填；恰好一个来源 func_name |
 | tgt_functions | array(string) | 必填；至少一个目标 func_name |
 | trigger_option | integer | 可选；仅 DIRECT 依赖项支持；0 = Value（默认），1 = Key + Value，2 = Key Only |
@@ -207,21 +207,7 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 | primitive.key_name | string | BY_NAME 必填；IMMEDIATE 禁止 |
 | trigger_option | integer | 0 / 1 / 2；默认 0 |
 
-trigger_option：0=Value，1=Key+Value，2=Key Only。每条 DIRECT 依赖可选 `trigger_option`，整数 `0`（默认，Value）、`1`（Key + Value）、`2`（Key Only）。同一条依赖的所有目标使用同一模式，需要不同模式时拆成多条依赖。同一 App 内重复的 DIRECT 来源／目标对在初始化时拒绝。 汇聚与投票依赖保持 Value。
-
-### 汇聚、投票和批处理
-
-| 类型 | 新字段（相对所在对象） | 约束 |
-|---|---|---|
-| dependencies[] MANY_TO_ONE | src_functions、tgt_functions | 至少两个不同来源、至少一个目标；全部引用当前 App 的 func_name |
-| dependencies[] K_OUT_OF_N | src_functions、tgt_functions、description.k、description.n | 1 ≤ k ≤ n，n 必须等于不同来源的数量；投票由目标函数执行 |
-| triggers[] BY_SET | primitive.function、primitive.key_set | 非空且不重复的 Key 列表 |
-| triggers[] REDUNDANT | primitive.function、primitive.key_set、primitive.k、primitive.n | 1 ≤ k ≤ n，n 等于 key_set 长度 |
-| triggers[] BY_BATCH_SIZE | primitive.function、primitive.count、primitive.time_window（可选，毫秒） | 正整数 count；达到条数立即触发，有窗口时到期提交非空余批 |
-| triggers[] BY_TIME | primitive.function、primitive.time_window（毫秒） | 首条数据开启窗口，到期提交非空批 |
-| triggers[] DYNAMIC_GROUP | primitive.function、primitive.control_group、primitive.data_group | 两个非空、内部无重复、互不重叠的 Key 列表；收齐两组后触发，只传 data_group |
-
-新规则拒绝未知字段、空标识、非法引用和数值越界。窗口毫秒值遵守下列换算边界；每条规则最多收集 4096 项。
+trigger_option：0=Value，1=Key+Value，2=Key Only。每条 DIRECT 依赖可选 `trigger_option`，整数 `0`（默认，Value）、`1`（Key + Value）、`2`（Key Only）。同一条依赖的所有目标使用同一模式，需要不同模式时拆成多条依赖。同一 App 内重复的 DIRECT 来源／目标对在初始化时拒绝。
 
 ### 资源探测配置
 
@@ -241,9 +227,9 @@ trigger_option：0=Value，1=Key+Value，2=Key Only。每条 DIRECT 依赖可选
 4. 每项 Function 结构必须合法，so_name、func_name 必填；拒绝外部配置路径。
 5. func_name 在当前 App 内唯一；so_name 可以被多个 Function 共享。
 6. 同一 so_name + func_name 被多个 App 复用时，Resource 必须一致。
-7. 每条 DIRECT 配置必须只有一个 src_functions 项，tgt_functions 至少一个；来源和目标都必须存在。
+7. 依赖只接受 DIRECT，其他类型在初始化时拒绝。每条 DIRECT 配置必须只有一个 src_functions 项，tgt_functions 至少一个；来源和目标都必须存在。
 8. Trigger 的 Bucket 和目标 func_name 必须存在；trigger_name 在 App 内唯一。
-9. 接受 IMMEDIATE、BY_NAME 以及集合、投票、条数 / 时间批处理、分组触发原语；ByName 必须配置非空 key_name，Immediate 禁止 key_name。
+9. 仅接受 IMMEDIATE、BY_NAME；ByName 必须配置非空 key_name，Immediate 禁止 key_name。
 10. trigger_option 只允许 0、1、2。
 11. Delay Queue enabled 必须为布尔值；时间间隔和最大等待时间必须为正整数。
 12. 拒绝 execution、resource.timeout_ms、DataRef 和旧的双数据载体字段；Resource 中 GPU、Disk、Network 数值必须非负。
@@ -253,22 +239,16 @@ trigger_option：0=Value，1=Key+Value，2=Key Only。每条 DIRECT 依赖可选
 16. 多 App 的 delay_queue 三项有效配置必须完全一致；不一致拒绝当前 App，不改动已发布 Registry 和进程级延时配置。
 
 
-## B.6 汇聚与资源配置示例
+## B.6 资源配置示例
 
-可将以下对象分别并入现有 app.json 的 dependencies、triggers 和 scheduler（函数与 Bucket 引用沿用对应 App 配置）：
+可将以下对象并入现有 app.json：
 
 ~~~json
 {
-  "dependencies": [
-    {"type":"K_OUT_OF_N","src_functions":["replica_a","replica_b","replica_c"],"tgt_functions":["vote"],"description":{"k":2,"n":3}}
-  ],
-  "triggers": [
-    {"bucket":"b_shared","trigger_name":"t_batch","primitive_type":"BY_BATCH_SIZE","primitive":{"function":"processor","count":32,"time_window":100},"trigger_option":0}
-  ],
   "scheduler": {
     "resource_probe":{"disk_path":"/var/lib/pheromone","network_interface":"eth0","network_limit_mbps":1000}
   }
 }
 ~~~
 
-这里的 scheduler 示例为新增子字段，原 delay_queue 仍必填。时间窗口表达的是收到首条数据后的成批等待，不引入无数据也定时运行的 PERIODIC 调度。
+`scheduler.delay_queue` 仍为必填。

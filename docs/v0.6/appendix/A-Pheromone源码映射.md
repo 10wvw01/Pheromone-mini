@@ -42,7 +42,7 @@ Pheromone 的 Trigger 输入核心是 BucketKey（Bucket、Key、Session）；Tr
 - [trigger.hpp：BucketKey、TriggerAction、ImmediateTrigger、ByNameTrigger](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/common/include/trigger.hpp)
 - [notify_handler.cpp：遍历 Bucket Trigger 列表](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/coordinator/notify_handler.cpp)
 
-V0.6 保留 Immediate、ByName、同 Bucket 多 Trigger 独立匹配和 Trigger Option 0 / 1 / 2。V0.6 支持集合、投票、批处理与分组触发，详见核心模块详细设计。
+V0.6 保留 Immediate、ByName、同 Bucket 多 Trigger 独立匹配和 Trigger Option 0 / 1 / 2。
 
 ## A.5 Data Bucket 与通知字段
 

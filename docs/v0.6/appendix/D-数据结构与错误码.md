@@ -30,7 +30,7 @@ classDiagram
     class TaskInvocation {
       session_id
       FunctionInfo
-      input_mode
+      InputMode
       Args
     }
     AppRecord --> FunctionInfo

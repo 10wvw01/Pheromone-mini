@@ -132,16 +132,7 @@ Function 通过 Object API 写入输出数据。Object SDK 从 TaskContext.FuncN
 
 ## C.6 错误语义
 
-EventTriggerNotify 使用 Go error，不定义大型状态码枚举：
-
-| 错误 | 语义 |
-|---|---|
-| nil | 通知处理流程正常完成；无 Trigger 命中也属于正常处理 |
-| ErrNotInitialized | 尚未成功初始化或初始化尚未结束 |
-| ErrInvalidArgument | 事件或参数不合法 |
-| ErrInternal | 不可恢复的内部错误 |
-
-TriggerInit 失败时返回带文件路径、字段路径和底层原因的 error。资源不足、资源探测 / 准入计算失败、无 Trigger 命中和 Pool NoCapacity 不扩展为上游 API 错误码。
+两个上游 API 成功返回 `nil`，失败统一返回 `*APIError`，字段为 `StatusCode`（`uint16`）和 `Msg`（非空诊断文本）。调用方以 `errors.As` 提取错误并按状态码分支。类型定义与各接口适用状态见[第三部分 §10.5.6、§10.6](../03-接口与协作设计.md)。下游 `TryEnqueue` 仍只返回 `EnqueueResult`；任务路由结果不直接转换为上游错误。
 
 ## C.7 所有权与生命周期
 

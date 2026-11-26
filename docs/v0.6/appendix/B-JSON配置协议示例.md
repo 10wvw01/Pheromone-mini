@@ -9,7 +9,7 @@ V0.6 保留两类 JSON 配置文件，职责分离：
 
 TriggerInit 只接收 app.json 文件路径。模块自行读取 app.json，并根据 functions[].config_path 加载所有 function.json。function.json 的相对路径以 app.json 所在目录为基准。
 
-app.json 是应用拓扑和调度规则的唯一来源；DIRECT 和 Bucket Trigger 关系只写在 app.json，不在 function.json 重复声明，避免双重事实来源。function.json 当前只定义 CPU / Memory Resource，不定义未经确认的 execution 配置。
+app.json 是应用拓扑和调度规则的唯一来源；DIRECT 和 Bucket Trigger 关系只写在 app.json，不在 function.json 重复声明，避免双重事实来源。function.json 定义完整 Resource（CPU / Memory / GPU / Disk / Network），但 Task Router 本期只检查 CPU / Memory；不定义未经确认的 execution 配置。
 
 ## B.2 app.json 完整示例
 
@@ -77,7 +77,14 @@ app.json 是应用拓扑和调度规则的唯一来源；DIRECT 和 Bucket Trigg
   "version": "1.0.0",
   "resource": {
     "cpu_cores": 1,
-    "memory_mb": 128
+    "memory_mb": 128,
+    "gpu": {
+      "required": false,
+      "device_count": 0,
+      "memory_mb": 0
+    },
+    "disk_mb": 0,
+    "network_mbps": 0
   }
 }
 ~~~
@@ -112,8 +119,13 @@ app.json 是应用拓扑和调度规则的唯一来源；DIRECT 和 Bucket Trigg
 | version | string | 可选 |
 | resource.cpu_cores | number | 必填；有限且大于 0 |
 | resource.memory_mb | integer | 必填；大于 0 |
+| resource.gpu.required | boolean | 可选；默认 false |
+| resource.gpu.device_count | integer | 可选；默认 0；非负 |
+| resource.gpu.memory_mb | integer | 可选；默认 0；非负 |
+| resource.disk_mb | integer | 可选；默认 0；非负 |
+| resource.network_mbps | integer | 可选；默认 0；非负 |
 
-function.json 不包含 execution、timeout_ms、GPU、Disk、Network 等当前未纳入本期资源准入范围的字段。
+function.json 不包含 execution、timeout_ms；GPU、Disk、Network 字段保留为静态资源元数据，当前不参与 Task Router 的 CPU / Memory 准入判断。
 
 ### DIRECT Dependency
 
@@ -152,5 +164,5 @@ trigger_option：0=Value，1=Key+Value，2=Key Only。DIRECT 不使用 trigger_o
 9. 仅接受 IMMEDIATE / BY_NAME；ByName 必须配置非空 key_name，Immediate 禁止 key_name。
 10. trigger_option 只允许 0、1、2。
 11. Delay Queue enabled 必须为布尔值；时间间隔和最大等待时间必须为正整数。
-12. 拒绝 execution、resource.timeout_ms、DataRef 和旧的双数据载体字段。
+12. 拒绝 execution、resource.timeout_ms、DataRef 和旧的双数据载体字段；Resource 中 GPU、Disk、Network 数值必须非负。
 13. 当前 App 的全部配置必须整体校验成功后才发布；任一 function.json 失败不得留下部分 AppRecord。

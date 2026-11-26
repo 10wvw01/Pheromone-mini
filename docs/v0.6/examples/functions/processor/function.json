@@ -5,6 +5,13 @@
   "version": "1.0.0",
   "resource": {
     "cpu_cores": 1,
-    "memory_mb": 256
+    "memory_mb": 256,
+    "gpu": {
+      "required": false,
+      "device_count": 0,
+      "memory_mb": 0
+    },
+    "disk_mb": 0,
+    "network_mbps": 0
   }
 }

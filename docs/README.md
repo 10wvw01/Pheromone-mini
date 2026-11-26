@@ -16,6 +16,8 @@ V0.6 使用 Go 实现。上游仅有 TriggerInit 和 EventTriggerNotify 两个 A
 | [05-需求追踪与测试验收](v0.6/05-需求追踪与测试验收.md) | 独立验收、Mock 端到端、真实联调及分阶段门槛 |
 | [06-分功能需求列表](v0.6/06-分功能需求列表.md) | 按模块拆分的 P0 功能需求和责任边界 |
 
+- [V0.6 Final Design Review（R2，通过）](v0.6/reviews/V0.6-Final-Design-Review.md)
+
 ## V0.6 附录与示例
 
 - [附录 A：Pheromone 源码映射与裁剪说明](v0.6/appendix/A-Pheromone源码映射.md)

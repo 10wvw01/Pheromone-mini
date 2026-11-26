@@ -93,7 +93,8 @@
       ],
       "tgt_functions": [
         "direct_processor"
-      ]
+      ],
+      "trigger_option": 0
     }
   ],
   "triggers": [

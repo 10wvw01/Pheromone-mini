@@ -65,7 +65,7 @@ EventTriggerNotify 独立接收 sourceFuncName、dataAddr、dataSize。外部 Ac
 | Function.FuncName | 是 | 目标函数标识 |
 | Function.Resource | 是 | 完整 CPU / Memory / GPU / Disk / Network 静态资源需求；Router 必查 CPU / Memory，按需检查 GPU / Disk / Network |
 | InputMode | 是 | InputValue / InputKeyValue / InputKeyOnly |
-| Args | 是 | 参数数组；普通触发长度为 1，扩展触发可多项 |
+| Args | 是 | 参数数组；长度为 1 |
 
 每个 TaskArgument 包含必填 Key、DataAddr 和 DataSize。DataAddr 在 DataSize 大于 0 时必须非空。
 

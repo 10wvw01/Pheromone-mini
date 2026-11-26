@@ -157,9 +157,9 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
 | app_name | string | 必填；Registry 内唯一 |
 | description | string | 可选 |
 | version | string | 必填 |
-| scheduler.delay_queue.enabled | boolean | 必填 |
-| scheduler.delay_queue.retry_interval_ms | integer | 必填且大于 0 |
-| scheduler.delay_queue.max_wait_ms | integer | 必填且大于 0，且不小于 retry_interval_ms |
+| scheduler.delay_queue.enabled | boolean | 必填；资源不足、探测失败、计算失败及 Pool NoCapacity 共用此开关 |
+| scheduler.delay_queue.retry_interval_ms | integer | 必填且大于 0；上述可延时原因的重试间隔 |
+| scheduler.delay_queue.max_wait_ms | integer | 必填且大于 0，且不小于 retry_interval_ms；从首次可延时原因计时，重试不重置 |
 | functions | array(object) | 必填，至少一个 |
 | functions[] | object | 直接包含下表 Function 字段；不接受外部配置路径 |
 | buckets | array(string) | 必填；跨 App 全局唯一 |

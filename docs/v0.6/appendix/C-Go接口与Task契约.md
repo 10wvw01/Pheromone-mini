@@ -98,7 +98,7 @@ type TaskPool interface {
 ~~~
 
 - TryEnqueue 是下游 Pool 唯一向本模块提供的接口；本模块不负责实例创建或装配。
-- 首次提交和每次延时重试必须先做 CPU / Memory 检查；不足或探测 / 计算失败仅打印日志并终止本次路由，不调用 Pool。
+- 首次提交和每次延时重试必须先做 CPU / Memory 检查；不足或探测 / 计算失败不调用 Pool，记录原因日志后按 scheduler.delay_queue.enabled 暂存重试或终止；固定首次可延时原因的 deadline，提交前不得到期。
 - 不带 ctx 参数；Pool 实例自身持有队列和运行状态。
 - 不提供 register_function、unregister_function、register_function_configs 或 wake_one。
 - TaskInvocation 携带完整 FunctionInfo（SOName、FuncName、Resource），不需要 Pool 启动阶段静态注册。

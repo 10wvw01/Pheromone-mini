@@ -109,7 +109,7 @@ Key 在 TaskArgument 中始终必填。InputMode 只决定 Function 输入视图
 | Error | 终止并记录内部错误 | 否 |
 | Delay expired | 记录 TASK_DELAY_EXPIRED，释放 Router 元数据 | 否 |
 
-CPU / Memory 资源不足发生在 TryEnqueue 之前，不调用 Pool，也不进入 Delay Queue。
+CPU / Memory 资源不足、探测失败和计算失败发生在 TryEnqueue 之前，不调用 Pool。三者均记录原因后判断 scheduler.delay_queue.enabled：启用则暂存重试，否则终止本次路由。与 Pool NoCapacity 共用同一 Delay Queue；Pool Error 不延时。
 
 ## D.8 错误语义
 
@@ -129,7 +129,9 @@ TriggerInit 的配置读取、JSON 解析、字段校验和索引构建错误通
 Delay Queue 为进程级全局配置。多个 App 声明的配置必须完全相同。具体字段：
 
 - enabled：是否启用。
-- retry_interval_ms：两次提交尝试的最小间隔。
-- max_wait_ms：从首次 NoCapacity 到终止的最大等待时长。
+- retry_interval_ms：资源复查及可能的提交尝试之间的重试间隔；下一次唤醒不晚于固定 deadline。
+- max_wait_ms：从首次资源不足、探测失败、计算失败或 Pool NoCapacity 到终止的最大等待时长；后续重试及原因变化不重置 deadline。
+
+每次重试先查到期，再执行资源检查；调用 TryEnqueue 前再次查到期。持续失败按 retry_interval_ms 重试直到 deadline，日志区分具体原因。
 
 时间使用单调时钟。队列达到实现级容量上限时，拒绝新项并释放 Router 持有的元数据。Delay Queue 只重试提交，不重新执行已经进入 Pool 的 Function。

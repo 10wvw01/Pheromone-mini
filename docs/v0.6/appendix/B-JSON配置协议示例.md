@@ -158,8 +158,8 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
 | description | string | 可选 |
 | version | string | 必填 |
 | scheduler.delay_queue.enabled | boolean | 必填；资源不足、探测失败、计算失败及 Pool NoCapacity 共用此开关 |
-| scheduler.delay_queue.retry_interval_ms | integer | 必填且大于 0；上述可延时原因的重试间隔 |
-| scheduler.delay_queue.max_wait_ms | integer | 必填且大于 0，且不小于 retry_interval_ms；从首次可延时原因计时，重试不重置 |
+| scheduler.delay_queue.retry_interval_ms | integer | 必填；1..9223372036854；上述可延时原因的重试间隔 |
+| scheduler.delay_queue.max_wait_ms | integer | 必填；1..9223372036854，且不小于 retry_interval_ms；从首次可延时原因计时，重试不重置 |
 | functions | array(object) | 必填，至少一个 |
 | functions[] | object | 直接包含下表 Function 字段；不接受外部配置路径 |
 | buckets | array(string) | 必填；跨 App 全局唯一 |
@@ -175,7 +175,7 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
 | description | string | 可选 |
 | version | string | 可选 |
 | resource.cpu_cores | number | 必填；有限且大于 0 |
-| resource.memory_mb | integer | 必填；大于 0 |
+| resource.memory_mb | integer | 必填；1..17592186044415，换算字节后可由 uint64 表示 |
 | resource.gpu.required | boolean | 可选；默认 false |
 | resource.gpu.device_count | integer | 可选；默认 0；非负 |
 | resource.gpu.memory_mb | integer | 可选；默认 0；非负 |
@@ -223,3 +223,6 @@ trigger_option：0=Value，1=Key+Value，2=Key Only。DIRECT 不使用 trigger_o
 11. Delay Queue enabled 必须为布尔值；时间间隔和最大等待时间必须为正整数。
 12. 拒绝 execution、resource.timeout_ms、DataRef 和旧的双数据载体字段；Resource 中 GPU、Disk、Network 数值必须非负。
 13. 当前 App 的全部配置必须整体校验成功后才发布；任一内嵌 Function 校验失败不得留下部分 AppRecord。
+14. 所有整数字段无损解析，不经 float64 中转：gpu.device_count 在 uint32 范围，其余无符号资源整数字段在 uint64 范围；拒绝小数、负数或超范围值。CPU 必须为可表示的有限正浮点数。
+15. retry_interval_ms / max_wait_ms 换算 time.Duration 前检查 int64 纳秒上限；memory_mb 换算字节前检查 uint64 上限。超界在 TriggerInit 阶段拒绝，不留到运行时反复延时；运行时样本计算仍做防御检查。
+16. 多 App 的 delay_queue 三项有效配置必须完全一致；不一致拒绝当前 App，不改动已发布 Registry 和进程级延时配置。

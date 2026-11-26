@@ -105,7 +105,7 @@ type TaskPool interface {
 
 ## C.4 TryEnqueue 接收语义
 
-- TryEnqueue 原子完成容量判断和入队。
+- TryEnqueue 原子完成容量判断和入队；不等待容量恢复或任务执行完成，不在调用栈内同步执行函数。
 - Accepted：Pool 接收任务，必须复制 TaskInvocation 的 Args 切片及后续需要独立持有的描述符；Go string 可共享其不可变内容。
 - NoCapacity：Pool 不接管任务，返回后不得继续引用调用方可变 Args 切片。
 - Error：Pool 不接管任务。

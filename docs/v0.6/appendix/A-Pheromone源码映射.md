@@ -4,7 +4,7 @@
 
 参考仓库：[MincYu/pheromone](https://github.com/MincYu/pheromone)。
 
-本项目借鉴 Pheromone 的数据驱动执行模型和 Trigger / DIRECT 语义，不复制其完整分布式系统。源码路径以 Pheromone main 分支为参考；若后续固定 commit，应在正式实现评审时记录 commit SHA。
+本项目借鉴 Pheromone 的数据驱动执行模型和 Trigger / DIRECT 语义，不复制其完整分布式系统。本轮固定参考提交为 `4d22677aa20dd94069da06d47ec2608504bf6bf4`；已复核 DIRECT 优先分支、Immediate / ByName、输入模式和执行消息相关源码。源码链接固定到该提交；V0.6 的地址传递和 Go API 是本项目裁剪契约，不等同于上游协议。
 
 ## A.2 两级调度取舍
 
@@ -17,9 +17,9 @@
 | Remote Forward | 本地资源不足时转发其他节点 | 不实现，只留日志和扩展点 |
 
 参考源码：
-- [func_call_handler.cpp](https://github.com/MincYu/pheromone/blob/main/src/coordinator/func_call_handler.cpp)
-- [notify_handler.cpp](https://github.com/MincYu/pheromone/blob/main/src/coordinator/notify_handler.cpp)
-- [scheduler_server.cpp](https://github.com/MincYu/pheromone/blob/main/src/scheduler/scheduler_server.cpp)
+- [func_call_handler.cpp](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/coordinator/func_call_handler.cpp)
+- [notify_handler.cpp](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/coordinator/notify_handler.cpp)
+- [scheduler_server.cpp](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/scheduler/scheduler_server.cpp)
 
 V0.6 不声称实现 Pheromone 完整两级调度。当前仅覆盖单节点、单进程内的任务准入和延时重试。
 
@@ -28,9 +28,9 @@ V0.6 不声称实现 Pheromone 完整两级调度。当前仅覆盖单节点、�
 Pheromone 的 AppRegistration / DataDependency 使用 DIRECT 类型以及来源函数、目标函数集合。Local Scheduler 在处理 Function 输出对象时先查来源函数是否存在 DIRECT 依赖；存在则调度目标函数，不再进入普通 Bucket Trigger 检查。
 
 参考：
-- [operation.proto：DataDependency / AppRegistration](https://github.com/MincYu/pheromone/blob/main/common/proto/operation.proto)
-- [app_register_handler.cpp：DIRECT 依赖保留](https://github.com/MincYu/pheromone/blob/main/src/coordinator/app_register_handler.cpp)
-- [scheduler_server.cpp：DIRECT 分支优先于 Trigger 检查](https://github.com/MincYu/pheromone/blob/main/src/scheduler/scheduler_server.cpp)
+- [operation.proto：DataDependency / AppRegistration](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/common/proto/operation.proto)
+- [app_register_handler.cpp：DIRECT 依赖保留](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/coordinator/app_register_handler.cpp)
+- [scheduler_server.cpp：DIRECT 分支优先于 Trigger 检查](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/scheduler/scheduler_server.cpp)
 
 V0.6 保留 DIRECT 独立路径、来源 Function 到多个目标 Function 的映射，以及 DIRECT 优先于 Bucket Trigger 的规则。每条 DIRECT 配置只声明一个 source func_name，多个目标放入 tgt_functions；DIRECT 目标默认 InputValue。
 
@@ -39,8 +39,8 @@ V0.6 保留 DIRECT 独立路径、来源 Function 到多个目标 Function 的�
 Pheromone 的 Trigger 输入核心是 BucketKey（Bucket、Key、Session）；Trigger 根据自身配置产生 TriggerAction。Bucket 到 Trigger 的索引是一个列表，一个 Bucket 可以关联多个 Trigger。
 
 参考：
-- [trigger.hpp：BucketKey、TriggerAction、ImmediateTrigger、ByNameTrigger](https://github.com/MincYu/pheromone/blob/main/common/include/trigger.hpp)
-- [notify_handler.cpp：遍历 Bucket Trigger 列表](https://github.com/MincYu/pheromone/blob/main/src/coordinator/notify_handler.cpp)
+- [trigger.hpp：BucketKey、TriggerAction、ImmediateTrigger、ByNameTrigger](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/common/include/trigger.hpp)
+- [notify_handler.cpp：遍历 Bucket Trigger 列表](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/coordinator/notify_handler.cpp)
 
 V0.6 保留 Immediate、ByName、同 Bucket 多 Trigger 独立匹配和 Trigger Option 0 / 1 / 2。V0.6 不实现 BySet、ByBatchSize、ByTime、DynamicGroup、Redundant 等 Primitive。
 
@@ -65,7 +65,7 @@ V0.6 收敛为 TaskInvocation：
 
 FunctionInfo 随每个 TaskInvocation 通过 TryEnqueue 传递，不通过单独静态注册 API 交付。Pool 自行消费队列和唤醒协程。
 
-参考：[scheduler_server.cpp](https://github.com/MincYu/pheromone/blob/main/src/scheduler/scheduler_server.cpp)、[executor_server.cpp](https://github.com/MincYu/pheromone/blob/main/src/executor/executor_server.cpp)。
+参考：[scheduler_server.cpp](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/scheduler/scheduler_server.cpp)、[executor_server.cpp](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/executor/executor_server.cpp)。
 
 ## A.7 本期明确裁剪
 

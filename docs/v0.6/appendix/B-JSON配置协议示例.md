@@ -104,7 +104,8 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
       ],
       "tgt_functions": [
         "direct_processor"
-      ]
+      ],
+      "trigger_option": 0
     }
   ],
   "triggers": [
@@ -191,9 +192,43 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 | type | string | DIRECT |
 | src_functions | array(string) | 必填；恰好一个来源 func_name |
 | tgt_functions | array(string) | 必填；至少一个目标 func_name |
-| trigger_option | integer | 可选；仅 DIRECT 依赖项支持；0 = Value（默认），1 = Key + Value，2 = Key Only |
+| trigger_option | integer | 可选；在 `dependencies[]` 中仅 DIRECT 支持；0 = Value（默认），1 = Key + Value，2 = Key Only |
 
 来源和目标必须属于同一 App 的 functions。一个来源可对应多个目标；多个来源拆成多条依赖配置。
+
+字段写在 `dependencies[]` 的 DIRECT 对象内。完整 `app.json` 示例显式设置 `0`，目标函数收到 Value。省略字段时效果相同。以下两段配置可分别替换完整示例中的同一条依赖。
+
+**Key + Value（1）**
+
+~~~json
+{
+  "type": "DIRECT",
+  "src_functions": [
+    "direct_source"
+  ],
+  "tgt_functions": [
+    "direct_processor"
+  ],
+  "trigger_option": 1
+}
+~~~
+
+**Key Only（2）**
+
+~~~json
+{
+  "type": "DIRECT",
+  "src_functions": [
+    "direct_source"
+  ],
+  "tgt_functions": [
+    "direct_processor"
+  ],
+  "trigger_option": 2
+}
+~~~
+
+选择 `2` 时，Pool 向目标函数提供 Key。所有目标共用当前依赖项的模式。
 
 ### Bucket 与 Trigger
 
@@ -207,7 +242,7 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 | primitive.key_name | string | BY_NAME 必填；IMMEDIATE 禁止 |
 | trigger_option | integer | 0 / 1 / 2；默认 0 |
 
-trigger_option：0=Value，1=Key+Value，2=Key Only。每条 DIRECT 依赖可选 `trigger_option`，整数 `0`（默认，Value）、`1`（Key + Value）、`2`（Key Only）。同一条依赖的所有目标使用同一模式，需要不同模式时拆成多条依赖。同一 App 内重复的 DIRECT 来源／目标对在初始化时拒绝。
+`trigger_option` 是 `app.json` 中 DIRECT 依赖项和 Bucket Trigger 的可选整数配置，省略时按 `0` 处理。解析配置时，`0`、`1`、`2` 分别映射为 Go 类型 `InputMode` 的 `InputValue`、`InputKeyValue`、`InputKeyOnly`，运行时写入 `TaskInvocation.InputMode`。 同一条 DIRECT 依赖的所有目标使用同一模式。不同目标需要不同模式时，拆成多条依赖。初始化时拒绝同一 App 内重复的 DIRECT 来源／目标对。
 
 ### 资源探测配置
 

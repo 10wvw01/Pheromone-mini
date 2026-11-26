@@ -13,6 +13,7 @@ import (
 	"triggerEngine/internal/timing"
 )
 
+// pendingTask 持有排队所需的任务元数据和重试时间。最终期限在首次延迟时固定，见 V0.6 §9.5 和 §14.5。
 type pendingTask struct {
 	task          contract.TaskInvocation
 	domain        config.Domain
@@ -23,6 +24,7 @@ type pendingTask struct {
 	next          time.Time
 }
 
+// delayHeap 按下次尝试时间排序，支持调度协程优先处理最早到期的任务，见 V0.6 §14.4。
 type delayHeap []*pendingTask
 
 // Len 返回等待重试的任务数量。
@@ -46,6 +48,7 @@ func (h *delayHeap) Pop() any {
 	return x
 }
 
+// router 执行资源预检查、任务池入队和进程级延迟重试，见 V0.6 §9.2–9.5。
 type router struct {
 	pool  contract.TaskPool
 	probe resource.Probe
@@ -74,7 +77,7 @@ func newRouter(d Dependencies) *router {
 	}
 }
 
-// submit 立即尝试提交任务，并为允许重试的任务安排等待。
+// submit 按 V0.6 §14.1、§14.5 先执行一次完整提交，出现允许延迟的结果时才安排重试。
 func (r *router) submit(task contract.TaskInvocation, domain config.Domain, delay config.Delay, log *slog.Logger) {
 	p := &pendingTask{task: task, domain: domain, delay: delay, log: log}
 	if r.attempt(p) {
@@ -82,7 +85,7 @@ func (r *router) submit(task contract.TaskInvocation, domain config.Domain, dela
 	}
 }
 
-// stopAttempt 判断任务是否已超过等待期限，或调度器是否正在关闭。
+// stopAttempt 按 V0.6 §14.5–14.6 拒绝期限已到或调度已被取消的尝试。
 func (r *router) stopAttempt(p *pendingTask) bool {
 	if !p.deadline.IsZero() && !r.clock.Now().Before(p.deadline) {
 		p.log.Info("TASK_DELAY_EXPIRED", "delay_state", "expired", "first_deferred", p.firstDeferred, "deadline", p.deadline)
@@ -95,12 +98,12 @@ func (r *router) stopAttempt(p *pendingTask) bool {
 	return false
 }
 
-// attempt 采集资源并尝试把任务交给任务池。返回 true 表示还可重试。
+// attempt 按 V0.6 §14.1、§14.3 每次重新检查资源，再调用任务池。返回 true 表示允许重试。
 func (r *router) attempt(p *pendingTask) bool {
 	if r.stopAttempt(p) {
 		return false
 	}
-	// 资源采集可能阻塞，采集完成后再次检查期限和取消状态。
+	// §14.5 要求每次重试先检查资源。采集可能等待，因此完成后再次检查期限和取消状态。
 	s, err := r.probe.Read(r.ctx, p.domain, p.task.Function)
 	if r.stopAttempt(p) {
 		return false
@@ -144,12 +147,12 @@ func (r *router) attempt(p *pendingTask) bool {
 	}
 }
 
-// deferTask 记录本次未能提交的原因，并在首轮等待时确定最终期限。
+// deferTask 按 V0.6 §9.5 记录延迟原因，在首次延迟时固定最终期限。
 func (r *router) deferTask(p *pendingTask, reason string, fields ...any) bool {
 	now := r.clock.Now()
 	state := "rejected"
 	if p.delay.Enabled {
-		// 以首次延迟时间计算固定期限，后续重试沿用该期限。
+		// 按 §9.5 以首次延迟时间计算固定期限。后续失败原因变化时仍沿用同一期限。
 		if p.deadline.IsZero() {
 			p.firstDeferred = now
 			p.deadline = now.Add(p.delay.MaxWait)
@@ -161,7 +164,7 @@ func (r *router) deferTask(p *pendingTask, reason string, fields ...any) bool {
 	return p.delay.Enabled && !r.stopAttempt(p)
 }
 
-// schedule 安排下一次尝试。已在等待队列中的任务重试时沿用原有名额。
+// schedule 按 V0.6 §14.4–14.5 安排下次尝试。已经入队的任务重试时沿用现有名额。
 func (r *router) schedule(p *pendingTask, retry bool) {
 	// 下一次唤醒时间不得晚于最终期限。
 	p.next = r.clock.Now().Add(p.delay.RetryInterval)
@@ -202,7 +205,7 @@ func (r *router) schedule(p *pendingTask, retry bool) {
 	}
 }
 
-// run 等待下一项任务到期并重试，遇到新的调度安排时重新计算等待时间。
+// run 按 V0.6 §14.4 用一个定时器等待队首任务。收到新的调度安排时重新确定唤醒时间。
 func (r *router) run() {
 	for r.ctx.Err() == nil {
 		r.mu.Lock()
@@ -239,7 +242,7 @@ func (r *router) run() {
 	}
 }
 
-// close 取消等待中的任务，并等重试协程退出。
+// close 按 V0.6 §14.6 取消排队任务，并等待重试协程结束。
 func (r *router) close() {
 	r.mu.Lock()
 	r.cancel()

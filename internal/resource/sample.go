@@ -14,12 +14,13 @@ const (
 	sampleMaxAge   = 200 * time.Millisecond
 )
 
-// fresh 判断采样时间是否处于允许使用的时间范围。
+// fresh 按 V0.6 §14.2 检查采样时间，年龄超过 200 ms 或位于未来时需刷新。
 func fresh(now, at time.Time) bool {
 	age := now.Sub(at)
 	return !at.IsZero() && age >= 0 && age <= sampleMaxAge
 }
 
+// sampleCache 按 V0.6 §14.2 共享有效结果，并合并同一资源的并发刷新。
 type sampleCache[T any] struct {
 	mu      sync.Mutex
 	value   T
@@ -27,7 +28,7 @@ type sampleCache[T any] struct {
 	refresh chan struct{}
 }
 
-// get 返回仍有效的采样结果，或协调多个调用共享一次重新采样。
+// get 按 V0.6 §14.2 返回有效样本。缓存过期时，同一资源的并发调用共享一次读取。
 func (c *sampleCache[T]) get(ctx context.Context, clock timing.Clock, read func() (T, time.Time, error)) (T, time.Time, error) {
 	for {
 		c.mu.Lock()
@@ -62,7 +63,7 @@ func (c *sampleCache[T]) get(ctx context.Context, clock timing.Clock, read func(
 	}
 }
 
-// pair 按规定间隔读取两次数据，返回样本、结束时间和实际经过时间。
+// pair 按 V0.6 §14.2 的 100 ms 周期采样两次，以实际经过时间作为计算分母。
 func pair[T any](ctx context.Context, clock timing.Clock, read func() (T, error)) (a, b T, elapsed time.Duration, at time.Time, err error) {
 	if err = ctx.Err(); err != nil {
 		return

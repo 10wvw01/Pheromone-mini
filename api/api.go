@@ -9,17 +9,28 @@ import (
 )
 
 type (
-	DataReadyEvent  = contract.DataReadyEvent
-	InputMode       = contract.InputMode
+	// DataReadyEvent 是 V0.6 §10.5.1 定义的数据就绪通知。
+	DataReadyEvent = contract.DataReadyEvent
+	// InputMode 是 V0.6 §10.5.3 定义的任务输入形式。
+	InputMode = contract.InputMode
+	// GPUResourceSpec 描述 V0.6 §14.7 的 GPU 资源需求。
 	GPUResourceSpec = contract.GPUResourceSpec
-	ResourceSpec    = contract.ResourceSpec
-	FunctionInfo    = contract.FunctionInfo
-	TaskArgument    = contract.TaskArgument
-	TaskInvocation  = contract.TaskInvocation
-	StatusCode      = contract.StatusCode
-	APIError        = contract.APIError
-	EnqueueResult   = contract.EnqueueResult
-	TaskPool        = contract.TaskPool
+	// ResourceSpec 描述 V0.6 §10.5.4 的函数资源需求。
+	ResourceSpec = contract.ResourceSpec
+	// FunctionInfo 携带 V0.6 §10.5.4 定义的执行入口和资源配置。
+	FunctionInfo = contract.FunctionInfo
+	// TaskArgument 描述 V0.6 §10.5.2 定义的单个任务输入。
+	TaskArgument = contract.TaskArgument
+	// TaskInvocation 是 V0.6 §10.5.5 定义的任务描述。
+	TaskInvocation = contract.TaskInvocation
+	// StatusCode 是 V0.6 附录 D §D.8 定义的接口状态码。
+	StatusCode = contract.StatusCode
+	// APIError 是 V0.6 §10.5.6 定义的结构化接口错误。
+	APIError = contract.APIError
+	// EnqueueResult 表示 V0.6 §10.5.7 定义的任务池接收结果。
+	EnqueueResult = contract.EnqueueResult
+	// TaskPool 是 V0.6 §10.7 定义的下游入队接口。
+	TaskPool = contract.TaskPool
 )
 
 const (
@@ -39,12 +50,12 @@ const (
 	EnqueueError      = contract.EnqueueError
 )
 
-// TriggerInit 校验应用配置，并在开始处理事件前将其注册到运行时。
+// TriggerInit 按 V0.6 接口设计 §10.6.1 读取并注册一个应用。调用方须在发送业务通知前完成所有应用的初始化。
 func TriggerInit(appJSONPath string) error {
 	return wiring.Instance().Init(appJSONPath)
 }
 
-// EventTriggerNotify 处理一条数据就绪通知。数据地址由 SDK 管理，在事件路由和异步任务执行期间须保持有效。
+// EventTriggerNotify 按 V0.6 接口设计 §10.6.2 处理一次成功提交后的数据就绪通知。SDK 须按 §11.5 保持数据地址有效，直至相关排队和执行结束。
 func EventTriggerNotify(event DataReadyEvent, sourceFuncName string, dataAddr unsafe.Pointer, dataSize uint64) error {
 	return wiring.Instance().Notify(event, sourceFuncName, dataAddr, dataSize)
 }

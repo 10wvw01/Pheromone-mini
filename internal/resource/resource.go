@@ -13,6 +13,7 @@ import (
 	"triggerEngine/internal/contract"
 )
 
+// Device 保存进程可见的 GPU 标识及以字节计的可用显存，见 V0.6 §14.7。
 type Device struct {
 	ID        string
 	FreeBytes uint64
@@ -24,6 +25,7 @@ type GPU interface {
 	Devices(context.Context) ([]Device, error)
 }
 
+// networkWindow 记录一个采样区间内的网卡字节增量和经过时间，供 §14.7 的带宽比较使用。
 type networkWindow struct {
 	bytes   uint64
 	elapsed time.Duration
@@ -40,6 +42,7 @@ func (w networkWindow) fits(limit, requested uint64) bool {
 	return rateHi < headroomHi || (rateHi == headroomHi && rateLo <= headroomLo)
 }
 
+// Snapshot 保存 V0.6 §14.2、§14.7 要求的资源预检查结果。可用量反映采样时刻，资源仍由系统管理。
 type Snapshot struct {
 	CPULimit, CPUUsed, CPUAvailable          float64
 	MemoryLimit, MemoryUsed, MemoryAvailable uint64
@@ -52,10 +55,12 @@ type Snapshot struct {
 	networkLimit                             uint64
 }
 
+// Probe 按 V0.6 §14.1 为任务提供资源快照，调用方负责判断是否满足需求。
 type Probe interface {
 	Read(context.Context, config.Domain, contract.FunctionInfo) (Snapshot, error)
 }
 
+// failure 为原始资源错误附上读取、解析或计算类别，供 V0.6 §15.2 的日志使用。
 type failure struct {
 	reason string
 	err    error
@@ -93,7 +98,7 @@ func requiresGPU(g contract.GPUResourceSpec) bool {
 	return g.Required || g.DeviceCount != 0 || g.MemoryMB != 0
 }
 
-// Evaluate 检查资源快照能否满足任务要求，返回首项不足的资源或采集、计算错误。
+// Evaluate 按 V0.6 §14.1、§14.2、§14.7 比较任务需求与资源快照，返回首项不足的资源或计算错误。
 func Evaluate(r contract.ResourceSpec, s Snapshot) (string, error) {
 	// 先核对数量的合法性，避免单位换算溢出或比较结果失真。
 	if !finite(r.CPUCores) || r.CPUCores <= 0 ||

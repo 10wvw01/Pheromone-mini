@@ -16,7 +16,7 @@ const (
 	maxStringBytes = 4096
 )
 
-// decode 先校验 JSON 的字段名、重复字段和取值类型，再解码到目标结构。
+// decode 按 V0.6 附录 B §B.5 先校验 JSON 的字段名、重复字段、类型和边界，再解码到目标结构。
 func decode(data []byte, dst any) error {
 	if len(data) > MaxFileBytes || !utf8.Valid(data) {
 		return fmt.Errorf("app.json exceeds the size limit or contains invalid UTF-8")

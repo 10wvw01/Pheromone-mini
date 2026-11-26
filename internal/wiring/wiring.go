@@ -10,7 +10,7 @@ import (
 
 var instance atomic.Pointer[engine.Runtime]
 
-// Install 注册宿主程序组装的运行时。应在首次调用公共接口前完成注册。
+// Install 按 V0.6 §11.1 注册集成方组装的运行时。应在首次调用公共接口前完成注册。
 func Install(r *engine.Runtime) error {
 	if r == nil || !instance.CompareAndSwap(nil, r) {
 		return errors.New("scheduler runtime already initialized or missing")
@@ -18,7 +18,7 @@ func Install(r *engine.Runtime) error {
 	return nil
 }
 
-// Instance 获取进程已注册的运行时，必要时建立默认实例。
+// Instance 获取 V0.6 §13.1 所述的进程级运行时，必要时建立默认实例。
 func Instance() *engine.Runtime {
 	if r := instance.Load(); r != nil {
 		return r

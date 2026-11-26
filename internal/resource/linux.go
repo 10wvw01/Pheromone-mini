@@ -19,8 +19,10 @@ import (
 	"triggerEngine/internal/timing"
 )
 
+// netCounters 保存网卡累计接收和发送字节数，见 V0.6 §14.7。
 type netCounters struct{ rx, tx uint64 }
 
+// Linux 实现 V0.6 §14.2 和 §14.7 的 Linux 资源采集，按进程可见范围读取系统信息。
 type Linux struct {
 	clock timing.Clock
 	gpu   GPU
@@ -37,8 +39,7 @@ func NewLinux(clock timing.Clock, gpu GPU) *Linux {
 	return NewLinuxWithSystemReaders(clock, gpu, os.ReadFile, statDisk)
 }
 
-// NewLinuxWithSystemReaders 使用指定的文件读取和文件系统统计函数创建资源采集器。
-// 未提供的读取函数使用 Linux 系统接口。
+// NewLinuxWithSystemReaders 创建可指定底层文件与磁盘统计读取方式的采集器，支持 V0.6 附录 E §E.2 的文件替换。未提供的读取函数使用 Linux 系统接口。
 func NewLinuxWithSystemReaders(clock timing.Clock, gpu GPU, read func(string) ([]byte, error), disk func(string) (uint64, uint64, error)) *Linux {
 	if read == nil {
 		read = os.ReadFile
@@ -49,7 +50,7 @@ func NewLinuxWithSystemReaders(clock timing.Clock, gpu GPU, read func(string) ([
 	return &Linux{clock: clock, gpu: gpu, read: read, disk: disk, network: make(map[string]*sampleCache[networkWindow])}
 }
 
-// Read 采集 CPU 和内存，并按任务声明采集 GPU、磁盘和网络数据。
+// Read 按 V0.6 §14.1 采集必查的 CPU、内存和任务声明的可选资源，并复核样本时效。
 func (l *Linux) Read(ctx context.Context, domain config.Domain, fn contract.FunctionInfo) (Snapshot, error) {
 	readBase := func() (Snapshot, time.Time, error) { return l.sampleBase(ctx) }
 	s, baseTime, err := l.base.get(ctx, l.clock, readBase)
@@ -57,7 +58,7 @@ func (l *Linux) Read(ctx context.Context, domain config.Domain, fn contract.Func
 		return Snapshot{}, err
 	}
 	r := fn.Resource
-	// 可选资源按任务声明采集，并记录各自的采样时间。
+	// §14.7 只要求采集任务声明的可选资源。各项采样时间独立记录。
 	var devices []Device
 	var gpuTime, diskTime, networkTime time.Time
 	var diskAvailable uint64
@@ -128,6 +129,7 @@ func statDisk(path string) (uint64, uint64, error) {
 	if err := syscall.Statfs(path, &stat); err != nil {
 		return 0, 0, err
 	}
+	// 优先使用分配单位。部分文件系统未填写 Frsize，按 Bsize 换算。
 	size := stat.Frsize
 	if size == 0 {
 		size = stat.Bsize
@@ -168,13 +170,15 @@ func (l *Linux) readNetwork(name string) (netCounters, error) {
 	if err != nil {
 		return netCounters{}, err
 	}
+	var counters netCounters
+	foundInterface := false
 	for line := range strings.SplitSeq(body, "\n") {
 		device, stats, found := strings.Cut(line, ":")
 		if !found || strings.TrimSpace(device) != name {
 			continue
 		}
 		f := strings.Fields(stats)
-		if len(f) != 16 {
+		if foundInterface || len(f) != 16 {
 			return netCounters{}, ParseFailure(fmt.Errorf("invalid /proc/net/dev statistics"))
 		}
 		rx, err1 := strconv.ParseUint(f[0], 10, 64)
@@ -182,9 +186,13 @@ func (l *Linux) readNetwork(name string) (netCounters, error) {
 		if err1 != nil || err2 != nil {
 			return netCounters{}, ParseFailure(fmt.Errorf("invalid /proc/net/dev byte counter"))
 		}
-		return netCounters{rx, tx}, nil
+		counters = netCounters{rx, tx}
+		foundInterface = true
 	}
-	return netCounters{}, ReadFailure(fmt.Errorf("interface %q unavailable in /proc/net/dev", name))
+	if !foundInterface {
+		return netCounters{}, ReadFailure(fmt.Errorf("interface %q unavailable in /proc/net/dev", name))
+	}
+	return counters, nil
 }
 
 // text 读取系统文件文本，并为读取错误补充路径。

@@ -352,10 +352,13 @@ func TestLinuxEnvironment(t *testing.T) {
 		}
 		t.Logf("ENV-02 live snapshot: source=%s cpu_limit=%g cpu_used=%g cpu_available=%g memory_limit=%d memory_used=%d memory_available=%d",
 			full.Source, full.CPULimit, full.CPUUsed, full.CPUAvailable, full.MemoryLimit, full.MemoryUsed, full.MemoryAvailable)
+		if source := os.Getenv("PHEROMONE_EXPECT_SOURCE"); source != "" && full.Source != source {
+			t.Fatalf("expected resource source %q, got %q", source, full.Source)
+		}
 		if raw := os.Getenv("PHEROMONE_EXPECT_CPU_LIMIT"); raw != "" {
 			want, err := strconv.ParseFloat(raw, 64)
-			if err != nil || full.CPULimit != want || !strings.Contains(full.Source, "cgroup(v2") {
-				t.Fatalf("expected actual cgroup v2 effective CPU limit %s, got %g (%s)", raw, full.CPULimit, full.Source)
+			if err != nil || full.CPULimit != want {
+				t.Fatalf("expected actual effective CPU limit %s, got %g (%s)", raw, full.CPULimit, full.Source)
 			}
 		}
 		if raw := os.Getenv("PHEROMONE_EXPECT_MEMORY_LIMIT"); raw != "" {
@@ -371,10 +374,12 @@ func TestLinuxEnvironment(t *testing.T) {
 		}
 		t.Logf("ENV-02 statfs available bytes=%d", disk.DiskAvailable)
 		_, err = l.Read(t.Context(), config.Domain{NetworkInterface: "lo", NetworkLimitMbps: 1000}, contract.FunctionInfo{Resource: contract.ResourceSpec{NetworkMbps: 1}})
+		if os.Getenv("PHEROMONE_EXPECT_LOOPBACK") != "" && err != nil {
+			t.Fatalf("ENV-02 loopback sampling: %v", err)
+		}
 		t.Logf("ENV-02 loopback sampling error=%v", err)
-
 	} else {
-		if os.Getenv("PHEROMONE_EXPECT_CPU_LIMIT") != "" || os.Getenv("PHEROMONE_EXPECT_MEMORY_LIMIT") != "" {
+		if os.Getenv("PHEROMONE_EXPECT_SOURCE") != "" || os.Getenv("PHEROMONE_EXPECT_CPU_LIMIT") != "" || os.Getenv("PHEROMONE_EXPECT_MEMORY_LIMIT") != "" {
 			t.Fatalf("expected constrained live cgroup: %v", err)
 		}
 		if resource.Reason(err) != "read" || !strings.Contains(err.Error(), "no visible mount") || full.CPUAvailable != 0 {
@@ -449,4 +454,201 @@ func primeBase(t *testing.T, clock *testclock.Clock, probe *resource.Linux) reso
 		t.Fatal(result.err)
 	}
 	return result.s
+}
+
+func TestLinuxResourceCompatibility(t *testing.T) {
+	const mib = config.MiB
+	v1Files := files(t, "v1")
+	tests := []struct {
+		name, fixture  string
+		change         func(map[string]string)
+		after          map[string]string
+		cpu, available float64
+		memory         uint64
+		failure        string
+	}{
+		{
+			name: "host without cgroup filesystem", fixture: "host",
+			change: func(f map[string]string) {
+				delete(f, "/proc/self/cgroup")
+				f["/proc/filesystems"] = "nodev\tproc\nnodev\ttmpfs\n"
+			},
+			cpu: 6, available: 6, memory: 4096 * mib,
+		},
+		{
+			name: "missing membership on cgroup capable kernel", fixture: "host",
+			change: func(f map[string]string) {
+				delete(f, "/proc/self/cgroup")
+				f["/proc/filesystems"] = "nodev\tproc\nnodev\tcgroup2\n"
+			},
+			failure: "read",
+		},
+		{
+			name: "older procfs without MemAvailable", fixture: "host",
+			change: func(f map[string]string) {
+				f["/proc/meminfo"] = "MemTotal: 8388608 kB\nMemFree: 1048576 kB\nCached: 4194304 kB\n"
+			},
+			cpu: 6, available: 6, memory: 1024 * mib,
+		},
+		{
+			name: "invalid MemAvailable cannot fall back", fixture: "host",
+			change: func(f map[string]string) {
+				f["/proc/meminfo"] = "MemTotal: 8388608 kB\nMemFree: 1048576 kB\nMemAvailable: bad\n"
+			},
+			failure: "parse",
+		},
+		{
+			name: "same CPU count with different affinity", fixture: "host",
+			change:  func(f map[string]string) { f["/proc/self/status"] = "Cpus_allowed_list: 0-2\n" },
+			after:   map[string]string{"/proc/self/status": "Cpus_allowed_list: 3-5\n"},
+			failure: "calculation",
+		},
+		{
+			name: "v1 named hierarchy only", fixture: "host",
+			change: func(f map[string]string) { f["/proc/self/cgroup"] = "1:name=systemd:/service\n" },
+			cpu:    6, available: 6, memory: 4096 * mib,
+		},
+		{
+			name: "v1 memory only", fixture: "v1",
+			change: func(f map[string]string) { f["/proc/self/cgroup"] = "3:memory:/svc/worker\n" },
+			cpu:    6, available: 6, memory: 256 * mib,
+		},
+		{
+			name: "v1 split accounting and shadowed mount", fixture: "v1",
+			change: func(f map[string]string) {
+				f["/proc/self/cgroup"] = "2:cpu:/svc/worker\n3:memory:/svc/worker\n4:cpuset:/svc/worker\n5:cpuacct:/svc/worker\n"
+				f["/proc/self/mountinfo"] = strings.ReplaceAll(f["/proc/self/mountinfo"], "rw,cpu,cpuacct", "rw,cpu")
+				f["/proc/self/mountinfo"] += "34 20 0:13 / /cg/acct rw - cgroup cgroup rw,cpuacct\n35 34 0:13 /svc /cg/acct ro - cgroup cgroup rw,cpuacct\n"
+				f["/cg/acct/cpuacct.usage"] = "300000000"
+				f["/cg/acct/worker/cpuacct.usage"] = "200000000"
+			},
+			after: map[string]string{"/cg/acct/cpuacct.usage": "450000000"},
+			cpu:   4, available: 2.5, memory: 256 * mib,
+		},
+		{
+			name: "v1 quota without accounting", fixture: "v1",
+			change:  func(f map[string]string) { f["/proc/self/cgroup"] = "2:cpu:/svc/worker\n3:memory:/svc/worker\n" },
+			failure: "read",
+		},
+		{
+			name: "v1 cpuset without controller prefixes", fixture: "v1",
+			change: func(f map[string]string) {
+				f["/proc/self/mountinfo"] = strings.ReplaceAll(f["/proc/self/mountinfo"], "rw,cpuset", "rw,cpuset,noprefix")
+				delete(f, "/cg/set/svc/worker/cpuset.effective_cpus")
+				f["/cg/set/svc/worker/cpus"] = "0-2"
+			},
+			cpu: 3, available: 3, memory: 256 * mib,
+		},
+		{
+			name: "mixed v1 CPU and v2 memory", fixture: "v2",
+			change: func(f map[string]string) {
+				v1 := v1Files
+				f["/proc/self/cgroup"] += "2:cpu,cpuacct:/svc/worker\n"
+				f["/proc/self/mountinfo"] += v1["/proc/self/mountinfo"]
+				for name, value := range v1 {
+					if strings.HasPrefix(name, "/cg/cpu/") {
+						f[name] = value
+					}
+				}
+				// CPU is attached to v1, so v2 CPU files are not needed.
+				delete(f, "/cg/service/cpu.max")
+				delete(f, "/cg/service/worker/cpu.max")
+			},
+			after: map[string]string{"/cg/cpu/svc/cpuacct.usage": "450000000"},
+			cpu:   4, available: 2.5, memory: 256 * mib,
+		},
+		{
+			name: "v2 mount with root outside current namespace", fixture: "v2",
+			change: func(f map[string]string) {
+				f["/proc/self/mountinfo"] += "34 20 0:9 /.. /hidden rw - cgroup2 cgroup rw\n"
+			},
+			after: map[string]string{"/cg/service/cpu.stat": "usage_usec 450000"},
+			cpu:   4, available: 2.5, memory: 256 * mib,
+		},
+		{
+			name: "v2 leaf without controllers retains ancestor limits", fixture: "v2",
+			change: func(f map[string]string) {
+				delete(f, "/cg/service/worker/cpu.max")
+				delete(f, "/cg/service/worker/memory.max")
+				f["/cg/service/cgroup.subtree_control"] = "pids\n"
+				f["/cg/service/worker/cgroup.type"] = "domain\n"
+			},
+			after: map[string]string{"/cg/service/cpu.stat": "usage_usec 450000"},
+			cpu:   4, available: 2.5, memory: 256 * mib,
+		},
+		{
+			name: "v2 private root lacks limit and hides parent", fixture: "v2",
+			change: func(f map[string]string) {
+				f["/proc/self/cgroup"] = "0::/\n"
+				f["/cg/cgroup.type"] = "domain\n"
+			},
+			failure: "read",
+		},
+		{
+			name: "v2 enabled controller has missing quota", fixture: "v2",
+			change: func(f map[string]string) {
+				delete(f, "/cg/service/worker/cpu.max")
+				f["/cg/service/cgroup.subtree_control"] = "cpu pids\n"
+				f["/cg/service/worker/cgroup.type"] = "domain\n"
+			},
+			failure: "read",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := files(t, tt.fixture)
+			tt.change(input)
+			clock := testclock.New()
+			probe := fromFiles(clock, input, tt.after)
+			switch tt.failure {
+			case "":
+				got := primeBase(t, clock, probe)
+				if got.CPULimit != tt.cpu || got.CPUAvailable != tt.available || got.MemoryAvailable != tt.memory {
+					t.Fatalf("unexpected host/cgroup limits: %+v", got)
+				}
+			case "calculation":
+				out := make(chan sampleResult, 1)
+				go func() {
+					got, err := probe.Read(t.Context(), config.Domain{}, contract.FunctionInfo{})
+					out <- sampleResult{got, err}
+				}()
+				waitTimer(t, clock, 100*time.Millisecond)
+				clock.Advance(100 * time.Millisecond)
+				got := getSample(t, out)
+				if got.err == nil || resource.Reason(got.err) != tt.failure || got.s.CPUAvailable != 0 {
+					t.Fatalf("expected %s failure, got %+v", tt.failure, got)
+				}
+			default:
+				got, err := probe.Read(t.Context(), config.Domain{}, contract.FunctionInfo{})
+				if err == nil || resource.Reason(err) != tt.failure || got.CPUAvailable != 0 {
+					t.Fatalf("expected %s failure, got %+v, %v", tt.failure, got, err)
+				}
+			}
+		})
+	}
+}
+
+func TestNamespaceResourceInputs(t *testing.T) {
+	t.Run("duplicate network record", func(t *testing.T) {
+		clock := testclock.New()
+		input := files(t, "host")
+		input["/proc/net/dev"] += "eth0: 100 0 0 0 0 0 0 0 200 0 0 0 0 0 0 0\n"
+		probe := fromFiles(clock, input, nil)
+		primeBase(t, clock, probe)
+		fn := contract.FunctionInfo{Resource: contract.ResourceSpec{NetworkMbps: 1}}
+		_, err := probe.Read(t.Context(), config.Domain{NetworkInterface: "eth0", NetworkLimitMbps: 10}, fn)
+		if err == nil || resource.Reason(err) != "parse" {
+			t.Fatalf("expected invalid per-interface counters, got %v", err)
+		}
+	})
+	t.Run("requested GPU without adapter", func(t *testing.T) {
+		clock := testclock.New()
+		probe := fromFiles(clock, files(t, "host"), nil)
+		primeBase(t, clock, probe)
+		fn := contract.FunctionInfo{Resource: contract.ResourceSpec{GPU: contract.GPUResourceSpec{Required: true}}}
+		_, err := probe.Read(t.Context(), config.Domain{}, fn)
+		if err == nil || resource.Reason(err) != "read" {
+			t.Fatalf("expected unavailable GPU telemetry, got %v", err)
+		}
+	})
 }

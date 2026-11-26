@@ -153,3 +153,25 @@ func TestByNamePreservesExactKey(t *testing.T) {
 		t.Fatalf("BY_NAME changed key to %q", got)
 	}
 }
+
+func TestNetworkInterfaceName(t *testing.T) {
+	body := fixture(t)
+	for _, tc := range []struct {
+		name  string
+		valid bool
+	}{
+		{"eth0.100", true},
+		{"veth01234567890", true},
+		{"veth012345678901", false},
+		{"eth 0", false},
+		{"eth0:1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.Replace(body, `"scheduler": {`, `"scheduler": {"resource_probe":{"network_interface":"`+tc.name+`","network_limit_mbps":100},`, 1)
+			_, err := config.Parse([]byte(raw))
+			if (err == nil) != tc.valid {
+				t.Fatalf("interface %q validity %t, error=%v", tc.name, tc.valid, err)
+			}
+		})
+	}
+}

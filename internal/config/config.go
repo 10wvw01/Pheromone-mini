@@ -13,23 +13,28 @@ import (
 
 const MiB = 1024 * 1024
 
+// Delay 保存进程级延时策略。各应用的值必须一致，见 V0.6 §9.5 和 §14.1。
 type Delay struct {
 	Enabled       bool
 	RetryInterval time.Duration
 	MaxWait       time.Duration
 }
 
+// Domain 指定磁盘路径、网络接口及带宽上限，见 V0.6 附录 B §B.4。
 type Domain struct {
 	DiskPath         string `json:"disk_path"`
 	NetworkInterface string `json:"network_interface"`
 	NetworkLimitMbps uint64 `json:"network_limit_mbps"`
 }
 
+// Action 将目标函数和输入形式合为一个动作，供直接依赖和数据桶规则共用，见 V0.6 第 6–8 章。
 type Action struct {
+	// Function 保存应用内嵌的函数定义，包含执行标识、资源需求和描述信息，见 V0.6 §5.3。
 	Function contract.FunctionInfo
 	Mode     contract.InputMode
 }
 
+// Rule 描述一个数据桶上的触发条件及目标动作，见 V0.6 §7.2–7.4。
 type Rule struct {
 	Name string
 	// 空键表示立即触发。按名称触发要求配置非空键。
@@ -43,6 +48,7 @@ type Function struct {
 	Version     string
 }
 
+// App 保存已校验的应用配置。发布后仅供查询，见 V0.6 §5.5 和 §13.1。
 type App struct {
 	Name        string
 	Description string
@@ -54,6 +60,7 @@ type App struct {
 	Direct      map[string][]Action
 }
 
+// fileConfig 对应 V0.6 附录 B §B.4 的 app.json 顶层结构，保留文件字段的原始形式。
 type fileConfig struct {
 	Name         string       `json:"app_name"`
 	Description  string       `json:"description"`
@@ -65,17 +72,20 @@ type fileConfig struct {
 	Triggers     []trigger    `json:"triggers"`
 }
 
+// scheduler 对应附录 B §B.4 中延时队列和资源采集的配置对象。
 type scheduler struct {
 	Delay  delayConfig `json:"delay_queue"`
 	Domain Domain      `json:"resource_probe"`
 }
 
+// delayConfig 保存以毫秒表示的延时参数。Enabled 使用指针，以区分省略与显式关闭。
 type delayConfig struct {
 	Enabled         *bool  `json:"enabled"`
 	RetryIntervalMS uint64 `json:"retry_interval_ms"`
 	MaxWaitMS       uint64 `json:"max_wait_ms"`
 }
 
+// function 对应附录 B §B.4 的 functions[] 项，资源需求随各函数声明。
 type function struct {
 	SOName      string   `json:"so_name"`
 	FuncName    string   `json:"func_name"`
@@ -84,6 +94,7 @@ type function struct {
 	Resource    resource `json:"resource"`
 }
 
+// resource 对应附录 B §B.4 的函数资源字段，容量沿用配置使用的 MiB。
 type resource struct {
 	CPUCores    float64 `json:"cpu_cores"`
 	MemoryMB    uint64  `json:"memory_mb"`
@@ -92,12 +103,14 @@ type resource struct {
 	NetworkMbps uint64  `json:"network_mbps"`
 }
 
+// gpu 对应附录 B §B.4 的 GPU 配置，显存要求适用于每张有效设备。
 type gpu struct {
 	Required    bool   `json:"required"`
 	DeviceCount uint32 `json:"device_count"`
 	MemoryMB    uint64 `json:"memory_mb"`
 }
 
+// dependency 对应附录 B §B.4 的直接依赖配置，用一个来源声明一个或多个目标。
 type dependency struct {
 	Type    string             `json:"type"`
 	Sources []string           `json:"src_functions"`
@@ -105,6 +118,7 @@ type dependency struct {
 	Mode    contract.InputMode `json:"trigger_option"`
 }
 
+// trigger 对应附录 B §B.4 的数据桶规则配置，包含规则类型、目标及输入形式。
 type trigger struct {
 	Bucket    string             `json:"bucket"`
 	Name      string             `json:"trigger_name"`
@@ -113,12 +127,13 @@ type trigger struct {
 	Mode      contract.InputMode `json:"trigger_option"`
 }
 
+// primitive 保存规则目标函数和名称条件。Key 使用指针，以区分省略与显式空字符串。
 type primitive struct {
 	Function string  `json:"function"`
 	Key      *string `json:"key_name"`
 }
 
-// Parse 校验配置文件并建立按函数、数据桶和直接依赖查询的索引。
+// Parse 按 V0.6 附录 B §B.4–B.5 校验配置，并构建 §5.5 要求的只读查询索引。
 func Parse(data []byte) (*App, error) {
 	var raw fileConfig
 	if err := decode(data, &raw); err != nil {
@@ -130,7 +145,7 @@ func Parse(data []byte) (*App, error) {
 	if raw.Scheduler.Delay.Enabled == nil {
 		return nil, fmt.Errorf("scheduler.delay_queue.enabled is required")
 	}
-	// 转换为 Go 时长前先检查范围，避免毫秒换算溢出。
+	// 按附录 B §B.5 先校验毫秒数及上下界，再换算成 Go 时长。
 	delay := raw.Scheduler.Delay
 	if delay.RetryIntervalMS == 0 || delay.MaxWaitMS < delay.RetryIntervalMS ||
 		delay.MaxWaitMS > uint64(math.MaxInt64/int64(time.Millisecond)) {
@@ -145,7 +160,7 @@ func Parse(data []byte) (*App, error) {
 		Buckets:   make(map[string][]Rule, len(raw.Buckets)),
 		Direct:    make(map[string][]Action),
 	}
-	// 先建立函数和数据桶索引，再校验规则对它们的引用。
+	// 按 §5.4 先登记函数和数据桶，再校验直接依赖和触发规则对它们的引用。
 	if err := app.addFunctions(raw.Functions); err != nil {
 		return nil, err
 	}
@@ -164,7 +179,7 @@ func Parse(data []byte) (*App, error) {
 	return app, nil
 }
 
-// addFunctions 校验函数定义和资源要求，登记函数并核对资源采集配置。
+// addFunctions 按 V0.6 §5.3、§13.2 和附录 B 校验函数标识、资源数量及可选采集配置。
 func (app *App) addFunctions(functions []function) error {
 	var disk, network bool
 	for i, fn := range functions {
@@ -206,14 +221,14 @@ func (app *App) addFunctions(functions []function) error {
 		}
 	}
 	if network || domain.NetworkInterface != "" || domain.NetworkLimitMbps != 0 {
-		if !safeName(domain.NetworkInterface) || len(domain.NetworkInterface) >= 16 || domain.NetworkLimitMbps == 0 {
+		if !validInterfaceName(domain.NetworkInterface) || domain.NetworkLimitMbps == 0 {
 			return fmt.Errorf("scheduler.resource_probe: require a valid network_interface and positive network_limit_mbps")
 		}
 	}
 	return nil
 }
 
-// addDependencies 校验直接依赖并按来源函数登记目标动作。
+// addDependencies 按 V0.6 §6.1–6.3 校验并建立来源函数到多个目标动作的索引。
 func (app *App) addDependencies(deps []dependency) error {
 	seen := make(map[[2]string]bool)
 	for i, dep := range deps {
@@ -238,7 +253,7 @@ func (app *App) addDependencies(deps []dependency) error {
 	return nil
 }
 
-// addRules 校验触发规则并按数据桶登记规则。
+// addRules 按 V0.6 §7.2–7.4 校验规则，保留同一数据桶的各条规则供独立匹配。
 func (app *App) addRules(rules []trigger) error {
 	seen := make(map[string]bool)
 	for i, t := range rules {
@@ -280,4 +295,9 @@ func blank(s string) bool { return strings.TrimSpace(s) == "" }
 func safeName(s string) bool {
 	return !blank(s) && s != "." && s != ".." &&
 		!strings.ContainsAny(s, "/\\") && strings.IndexFunc(s, func(r rune) bool { return r < ' ' || r == 127 }) < 0
+}
+
+// validInterfaceName 按 Linux 网卡命名约束校验附录 B §B.4 的 network_interface。
+func validInterfaceName(name string) bool {
+	return len(name) < 16 && safeName(name) && !strings.ContainsAny(name, " :")
 }

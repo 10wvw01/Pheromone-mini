@@ -17,6 +17,7 @@ import (
 	"triggerEngine/internal/timing"
 )
 
+// stage 记录 V0.6 §13.1 的注册和运行状态，另含 §14.6 所需的关闭状态。
 type stage uint8
 
 const (
@@ -27,15 +28,18 @@ const (
 	closed
 )
 
+// bucket 保存全局数据桶索引的一项，将名称关联到所属应用和规则，见 V0.6 §5.2、§7.1。
 type bucket struct {
 	app   *config.App
 	rules []config.Rule
 }
 
+// functionID 表示 V0.6 §13.2 定义的共享库和函数组合标识。
 type functionID struct {
 	soName, funcName string
 }
 
+// Runtime 持有进程的应用索引与调度器。应用注册结束后索引只读，见 V0.6 §13.1–13.3。
 type Runtime struct {
 	mu      sync.Mutex
 	stage   stage
@@ -49,6 +53,7 @@ type Runtime struct {
 	router     *router
 }
 
+// Dependencies 由集成方提供任务池等依赖，也支持附录 E §E.2 所列的测试替换。
 type Dependencies struct {
 	Pool       contract.TaskPool
 	Probe      resource.Probe
@@ -59,7 +64,7 @@ type Dependencies struct {
 	ReadConfig func(string) ([]byte, error)
 }
 
-// New 补齐未提供的依赖，并创建独立的触发运行时。
+// New 按 V0.6 §4.3 组装运行时，建立应用索引和进程级调度器。
 func New(d Dependencies) *Runtime {
 	// 为省略的依赖使用默认实现，保留集成方显式传入的设置。
 	if d.Clock == nil {
@@ -99,10 +104,10 @@ func apiError(code contract.StatusCode, format string, args ...any) error {
 	return &contract.APIError{StatusCode: code, Msg: fmt.Sprintf(format, args...)}
 }
 
-// Init 读取并校验一个应用配置，成功后将其注册到运行时。
+// Init 按 V0.6 §13.1 完成一次配置注册。只有解析和跨应用校验均成功时才发布。
 func (r *Runtime) Init(path string) error {
 	r.mu.Lock()
-	// 先登记初始化状态，防止并发初始化或通知读取半成品。
+	// 按 §13.1 先登记初始化状态，防止并发请求访问尚未发布的配置。
 	previous := r.stage
 	if previous != uninitialized && previous != ready {
 		r.mu.Unlock()
@@ -150,7 +155,7 @@ func (r *Runtime) Init(path string) error {
 	return nil
 }
 
-// publish 先检查应用之间的约束，再更新注册表。调用方须持有运行时的互斥锁。
+// publish 按 V0.6 §13.1–13.2 先检查跨应用约束，再更新全部索引。调用方须持有运行时的互斥锁。
 func (r *Runtime) publish(app *config.App) error {
 	if r.apps[app.Name] != nil {
 		return fmt.Errorf("app_name: duplicate App")
@@ -170,7 +175,7 @@ func (r *Runtime) publish(app *config.App) error {
 		}
 	}
 
-	// 所有冲突检查通过后再修改注册表，避免只注册一部分内容。
+	// 按 §13.1 在所有冲突检查通过后一次更新索引，失败的应用不会留下部分记录。
 	r.apps[app.Name] = app
 	r.delay = app.Delay
 	for name, rules := range app.Buckets {
@@ -182,7 +187,7 @@ func (r *Runtime) publish(app *config.App) error {
 	return nil
 }
 
-// beginNotify 核对运行状态、通知参数和数据桶归属，并登记正在处理的通知。
+// beginNotify 按 V0.6 §13.1 核对状态、通知参数和数据桶归属，首条有效通知将运行时切换为运行状态。
 func (r *Runtime) beginNotify(event contract.DataReadyEvent, source string, addr unsafe.Pointer, size uint64) (bucket, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -208,7 +213,7 @@ func (r *Runtime) beginNotify(event contract.DataReadyEvent, source string, addr
 	return b, nil
 }
 
-// Notify 按直接依赖或数据桶触发规则生成任务，并交给调度器提交。
+// Notify 按 V0.6 §6.2、§7.5 和 §8.4 选择触发路径，为每个命中项构建独立任务。
 func (r *Runtime) Notify(event contract.DataReadyEvent, source string, addr unsafe.Pointer, size uint64) error {
 	b, err := r.beginNotify(event, source, addr, size)
 	if err != nil {
@@ -216,7 +221,7 @@ func (r *Runtime) Notify(event contract.DataReadyEvent, source string, addr unsa
 	}
 	defer r.active.Done()
 
-	// 为每个匹配项构建独立的任务参数和日志字段。
+	// 按 §8.2–8.4 复制各任务的字符串和参数描述，原始数据地址继续由 SDK 管理。
 	dispatch := func(action config.Action, path, rule string) {
 		fn := action.Function
 		fn.SOName, fn.FuncName = strings.Clone(fn.SOName), strings.Clone(fn.FuncName)
@@ -230,7 +235,7 @@ func (r *Runtime) Notify(event contract.DataReadyEvent, source string, addr unsa
 			"key", task.Args[0].Key, "input_mode", task.InputMode, "args_count", len(task.Args))
 		r.router.submit(task, b.app.Domain, b.app.Delay, log)
 	}
-	// 直接依赖优先。来源函数命中直接依赖后，跳过数据桶触发规则。
+	// 按 §6.2 和 §7.5 优先处理直接依赖。该路径命中后，跳过数据桶触发规则。
 	if actions := b.app.Direct[source]; len(actions) != 0 {
 		for _, action := range actions {
 			dispatch(action, "DIRECT", "")
@@ -245,7 +250,7 @@ func (r *Runtime) Notify(event contract.DataReadyEvent, source string, addr unsa
 	return nil
 }
 
-// Close 停止接收新请求，取消调度并等待正在处理的请求结束。任务池和 SDK 由集成方关闭。
+// Close 按 V0.6 §14.6 停止接收通知、取消内部调度并等待活动请求结束。任务池及 SDK 由集成方关闭。
 func (r *Runtime) Close() {
 	r.mu.Lock()
 	r.stage = closed

@@ -12,6 +12,7 @@
 - [V0.6 核心模块详细设计](docs/v0.6/02-核心模块详细设计.md)
 - [V0.6 上下游接口与协作设计](docs/v0.6/03-接口与协作设计.md)
 - [V0.6 分功能需求列表](docs/v0.6/06-分功能需求列表.md)
+- [V0.6 app.json 配置字段规范](docs/v0.6/appendix/B-JSON配置协议示例.md)
 - [V0.6 app.json 示例](docs/v0.6/examples/app.json)
 - [V0.6 C ABI 示例](docs/v0.6/examples/task_scheduler.h)
 

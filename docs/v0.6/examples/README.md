@@ -2,7 +2,7 @@
 
 本目录包含唯一配置文件 app.json，以及 C11 公共 ABI 和无状态 handler 示例。
 
-- app.json：App、Function、DIRECT、Bucket、Trigger 和全局 Delay Queue。
+- [app.json](app.json)：App、Function、DIRECT、Bucket、Trigger 和全局 Delay Queue；参见 [配置字段规范](../appendix/B-JSON配置协议示例.md)。
 - task_scheduler.h：V0.6 上下游 C ABI 草案。
 - producer.c：通过 Object API 写入普通 Bucket。
 - direct_source.c：通过 Object API 写入数据，SDK 从 TaskContext 注入 source_function，触发 DIRECT 依赖。

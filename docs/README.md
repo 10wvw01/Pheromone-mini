@@ -19,7 +19,7 @@ V0.6 采用单一 app.json、DIRECT 独立依赖路径、Immediate / ByName 两�
 ## V0.6 附录与示例
 
 - [附录 A：Pheromone 源码映射与裁剪说明](v0.6/appendix/A-Pheromone源码映射.md)
-- [附录 B：app.json 配置协议](v0.6/appendix/B-JSON配置协议示例.md)
+- [附录 B：app.json 配置字段规范（逐字段解释、默认值、约束与示例）](v0.6/appendix/B-JSON配置协议示例.md)
 - [附录 C：C 接口与 Task ABI](v0.6/appendix/C-C接口与Task-ABI.md)
 - [附录 D：数据结构、所有权与错误码](v0.6/appendix/D-数据结构与错误码.md)
 - [app.json 示例](v0.6/examples/app.json)

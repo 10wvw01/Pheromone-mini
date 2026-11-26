@@ -16,9 +16,18 @@ const (
     InputKeyOnly
 )
 
+type GPUResourceSpec struct {
+    Required    bool
+    DeviceCount uint32
+    MemoryMB    uint64
+}
+
 type ResourceSpec struct {
-    CPUCores float64
-    MemoryMB uint64
+    CPUCores    float64
+    MemoryMB    uint64
+    GPU         GPUResourceSpec
+    DiskMB      uint64
+    NetworkMbps uint64
 }
 
 type FunctionInfo struct {

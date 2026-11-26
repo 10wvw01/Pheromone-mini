@@ -20,7 +20,7 @@
 
 - 实现语言为 Go。
 - 上游只调用 TriggerInit(appJSONPath) 和 EventTriggerNotify(event, sourceFuncName, dataAddr, dataSize) 两个 API。
-- TriggerInit 读取 app.json，并加载其中引用的各个 function.json；function.json 保存单个 Function 的 so_name、func_name 和 CPU / Memory 资源需求。
+- TriggerInit 读取 app.json，并加载其中引用的各个 function.json；function.json 保存单个 Function 的 so_name、func_name 和完整 Resource（CPU / Memory / GPU / Disk / Network）；Task Router 本期只检查 CPU / Memory。
 - DataReadyEvent 仅包含 bucket、key、session_id；数据统一通过 data_addr + data_size 传递，不区分大小数据包，不使用 DataRef。
 - Function 信息通过 TaskInvocation 随 TryEnqueue 传给下游；Pool 接口不带 ctx，不提供独立 Function 注册接口。
 - Task Router 在 TryEnqueue 前检查 CPU / Memory；资源不足不调用 TryEnqueue，进入上报 TODO 分支。

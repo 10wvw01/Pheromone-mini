@@ -1,0 +1,26 @@
+name: Go verification
+
+on: [push, pull_request]
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: false
+      - name: Format, build and verify
+        run: |
+          test -z "$(gofmt -l api internal tests)"
+          go build ./...
+          go test -count=1 ./...
+          go vet ./...
+          go test -race -count=1 ./...
+      - name: Fuzz configuration and event sequences
+        run: |
+          go test ./tests/config -run='^$' -fuzz='^FuzzConfig$' -fuzztime=30s -parallel=4
+          go test ./tests/engine -run='^$' -fuzz='^FuzzNotify$' -fuzztime=30s -parallel=4
+          go test ./tests/engine -run='^$' -fuzz='^FuzzDelaySequence$' -fuzztime=30s -parallel=4

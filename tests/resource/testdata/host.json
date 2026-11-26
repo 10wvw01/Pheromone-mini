@@ -1,0 +1,7 @@
+{
+  "/proc/self/status": "Name:\tfixture\nCpus_allowed_list:\t0-5\n",
+  "/proc/meminfo": "MemTotal: 8388608 kB\nMemAvailable: 4194304 kB\n",
+  "/proc/stat": "cpu 0 0 0 0 0 0 0 0\ncpu0 10 0 0 50 0 0 0 0 0 0\ncpu1 10 0 0 50 0 0 0 0 0 0\ncpu2 10 0 0 50 0 0 0 0 0 0\ncpu3 10 0 0 50 0 0 0 0 0 0\ncpu4 10 0 0 50 0 0 0 0 0 0\ncpu5 10 0 0 50 0 0 0 0 0 0\n",
+  "/proc/net/dev": "Inter-| Receive | Transmit\n eth0: 100 0 0 0 0 0 0 0 200 0 0 0 0 0 0 0\n eth1: 100 0 0 0 0 0 0 0 200 0 0 0 0 0 0 0\n",
+  "/proc/self/cgroup": ""
+}

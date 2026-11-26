@@ -1,0 +1,18 @@
+{
+  "/proc/self/status": "Name:\tfixture\nCpus_allowed_list:\t0-5\n",
+  "/proc/meminfo": "MemTotal: 8388608 kB\nMemAvailable: 4194304 kB\n",
+  "/proc/stat": "cpu 0 0 0 0 0 0 0 0\ncpu0 10 0 0 50 0 0 0 0 0 0\ncpu1 10 0 0 50 0 0 0 0 0 0\ncpu2 10 0 0 50 0 0 0 0 0 0\ncpu3 10 0 0 50 0 0 0 0 0 0\ncpu4 10 0 0 50 0 0 0 0 0 0\ncpu5 10 0 0 50 0 0 0 0 0 0\n",
+  "/proc/net/dev": "Inter-| Receive | Transmit\n eth0: 100 0 0 0 0 0 0 0 200 0 0 0 0 0 0 0\n eth1: 100 0 0 0 0 0 0 0 200 0 0 0 0 0 0 0\n",
+  "/proc/self/cgroup": "0::/service/worker\n",
+  "/proc/self/mountinfo": "30 20 0:9 / /cg rw - cgroup2 cgroup rw\n",
+  "/cg/cpu.stat": "usage_usec 400000\nuser_usec 10\n",
+  "/cg/service/cpu.stat": "usage_usec 300000\nuser_usec 10\n",
+  "/cg/service/worker/cpu.stat": "usage_usec 200000\nuser_usec 10\n",
+  "/cg/service/cpu.max": "400000 100000\n",
+  "/cg/service/worker/cpu.max": "max 100000\n",
+  "/cg/service/worker/cpuset.cpus.effective": "0-4\n",
+  "/cg/service/memory.max": "1073741824\n",
+  "/cg/service/memory.current": "805306368\n",
+  "/cg/service/worker/memory.max": "2147483648\n",
+  "/cg/service/worker/memory.current": "536870912\n"
+}

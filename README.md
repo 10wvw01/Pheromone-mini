@@ -36,7 +36,20 @@
 - [V0.3 历史设计基线](docs/archive/v0.3/V0.3-完整软件设计方案.md)
 - [历史版本归档说明](docs/archive/README.md)
 
-当前仓库交付为设计文档与接口示例，不代表软件实现或上下游联调已经完成。
+## 构建和接入
+
+在 Linux 使用 Go 1.26.2 执行：
+
+```sh
+go build ./...
+go test -count=1 ./...
+go vet ./...
+go test -race -count=1 ./...
+```
+
+上游从 `triggerEngine/api` 导入两项 API 和公共类型。集成方在本模块的部署入口用 `internal/engine.New` 组装真实 TaskPool，通过 `internal/wiring.Install` 在首次 API 调用前安装进程实例。生产资源适配器默认读取 Linux 资源接口。需要 GPU 准入的部署通过 `internal/resource.NewLinux` 提供进程可见设备遥测。关闭时先停止通知源，再调用内部运行时的 `Close`，由集成方管理 Pool 和 SDK 的后续收尾。
+
+测试代码、辅助包和测试数据统一放在 `tests/` 目录。
 
 ## 仓库管理约定
 

@@ -1,0 +1,21 @@
+{
+  "app_name": "e2e",
+  "version": "0.6.0",
+  "scheduler": {"delay_queue":{"enabled":true,"retry_interval_ms":10,"max_wait_ms":40}},
+  "functions": [
+    {"so_name":"first.so","func_name":"A","resource":{"cpu_cores":1,"memory_mb":1}},
+    {"so_name":"second.so","func_name":"B","resource":{"cpu_cores":2,"memory_mb":2}},
+    {"so_name":"second.so","func_name":"C","resource":{"cpu_cores":1,"memory_mb":1}}
+  ],
+  "buckets": ["input","named","output","fan","idle"],
+  "dependencies": [
+    {"type":"DIRECT","src_functions":["A"],"tgt_functions":["B"],"trigger_option":1}
+  ],
+  "triggers": [
+    {"bucket":"input","trigger_name":"immediate","primitive_type":"IMMEDIATE","primitive":{"function":"A"}},
+    {"bucket":"output","trigger_name":"skip_on_direct","primitive_type":"IMMEDIATE","primitive":{"function":"C"}},
+    {"bucket":"named","trigger_name":"ready_only","primitive_type":"BY_NAME","primitive":{"function":"A","key_name":"ready"},"trigger_option":2},
+    {"bucket":"fan","trigger_name":"first","primitive_type":"IMMEDIATE","primitive":{"function":"A"}},
+    {"bucket":"fan","trigger_name":"second","primitive_type":"IMMEDIATE","primitive":{"function":"B"}}
+  ]
+}

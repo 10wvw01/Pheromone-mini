@@ -12,6 +12,7 @@
   "functions": [
     {
       "so_name": "producer.so",
+      "func_name": "producer",
       "description": "处理输入并产生普通 Bucket 数据",
       "version": "1.0.0",
       "resource": {
@@ -24,17 +25,11 @@
         },
         "disk_mb": 0,
         "network_mbps": 0
-      },
-      "execution": {
-        "type": "coroutine",
-        "priority": 0,
-        "affinity": [],
-        "max_concurrency": 0,
-        "reuse": false
       }
     },
     {
       "so_name": "processor.so",
+      "func_name": "processor",
       "description": "消费 Bucket Trigger 输入",
       "version": "1.0.0",
       "resource": {
@@ -47,18 +42,12 @@
         },
         "disk_mb": 0,
         "network_mbps": 0
-      },
-      "execution": {
-        "type": "coroutine",
-        "priority": 0,
-        "affinity": [],
-        "max_concurrency": 0,
-        "reuse": false
       }
     },
     {
       "so_name": "direct_source.so",
-      "description": "DIRECT 依赖来源函数",
+      "func_name": "direct_source",
+      "description": "DIRECT 依赖的来源函数",
       "version": "1.0.0",
       "resource": {
         "cpu_cores": 1,
@@ -70,18 +59,12 @@
         },
         "disk_mb": 0,
         "network_mbps": 0
-      },
-      "execution": {
-        "type": "coroutine",
-        "priority": 0,
-        "affinity": [],
-        "max_concurrency": 0,
-        "reuse": false
       }
     },
     {
       "so_name": "direct_processor.so",
-      "description": "DIRECT 依赖目标函数",
+      "func_name": "direct_processor",
+      "description": "DIRECT 依赖的目标函数",
       "version": "1.0.0",
       "resource": {
         "cpu_cores": 1,
@@ -93,13 +76,6 @@
         },
         "disk_mb": 0,
         "network_mbps": 0
-      },
-      "execution": {
-        "type": "coroutine",
-        "priority": 0,
-        "affinity": [],
-        "max_concurrency": 0,
-        "reuse": false
       }
     }
   ],
@@ -112,8 +88,12 @@
   "dependencies": [
     {
       "type": "DIRECT",
-      "src_functions": ["direct_source.so"],
-      "tgt_functions": ["direct_processor.so"]
+      "src_functions": [
+        "direct_source"
+      ],
+      "tgt_functions": [
+        "direct_processor"
+      ]
     }
   ],
   "triggers": [
@@ -122,7 +102,7 @@
       "trigger_name": "t_input_immediate",
       "primitive_type": "IMMEDIATE",
       "primitive": {
-        "function": "producer.so"
+        "function": "producer"
       },
       "trigger_option": 0
     },
@@ -131,7 +111,7 @@
       "trigger_name": "t_shared_immediate",
       "primitive_type": "IMMEDIATE",
       "primitive": {
-        "function": "processor.so"
+        "function": "processor"
       },
       "trigger_option": 0
     },
@@ -140,7 +120,7 @@
       "trigger_name": "t_shared_byname_ready",
       "primitive_type": "BY_NAME",
       "primitive": {
-        "function": "processor.so",
+        "function": "processor",
         "key_name": "ready"
       },
       "trigger_option": 1

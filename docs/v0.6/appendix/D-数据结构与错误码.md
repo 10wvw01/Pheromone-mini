@@ -12,147 +12,126 @@ classDiagram
       TriggerIndex
       DelayQueueConfig
     }
-    class BucketRecord {
-      bucket_name
-      owning_app
-      TriggerList
-    }
-    class DirectDependency {
-      source_so_name
-      target_so_names
-    }
-    class TriggerConfig {
-      trigger_name
-      primitive_type
-      target_so_name
-      key_name
-      trigger_option
+    class FunctionInfo {
+      so_name
+      func_name
+      Resource
     }
     class DataReadyEvent {
       bucket
       key
       session_id
-      source_function
-      payload_type
+    }
+    class TaskArgument {
+      key
+      data_addr
       data_size
-      inline_data_or_data_ref
     }
     class TaskInvocation {
-      so_name
       session_id
+      FunctionInfo
       input_mode
-      key
-      payload_type
-      data_size
-      inline_data_or_data_ref
+      Args
     }
-    AppRecord --> BucketRecord
-    AppRecord --> DirectDependency
-    AppRecord --> TriggerConfig
+    AppRecord --> FunctionInfo
+    AppRecord --> DataReadyEvent
     DataReadyEvent --> TaskInvocation
+    FunctionInfo --> TaskInvocation
+    TaskInvocation --> TaskArgument
 ~~~
 
-DataReadyEvent 是上游借用视图；TaskInvocation 是提交给 Pool 的最小执行描述。TaskAction、RouterPendingTask 是内部对象，不属于 ABI。
+DataReadyEvent 是上游借用视图；TaskInvocation 是提交给 Pool 的最小执行描述。TaskAction、RouterPendingTask 是内部对象，不属于上游 API。
 
-## D.2 DataReadyEvent 最小字段
+## D.2 DataReadyEvent 与通知参数
+
+DataReadyEvent 只有三个字段：
 
 | 字段 | 必须 | 说明 |
 |---|---|---|
-| bucket | 是 | 全局唯一 Bucket |
-| key | 是 | 本次提交对象 Key |
-| session_id | 是 | 业务 Session |
-| source_function | 条件必需 | Function 输出时由 SDK 注入；外部 Actor 可空 |
-| payload_type | 是 | INLINE / SHARED_MEMORY |
-| data_size | 是 | 本次提交数据长度 |
-| inline_data / inline_size | INLINE 必须 | 临时借用数据 |
-| data_ref | SHARED_MEMORY 必须 | Data SDK 不透明引用 |
+| Bucket | 是 | 全局唯一 Bucket |
+| Key | 是 | 本次提交对象 Key |
+| SessionID | 是 | 业务 Session |
 
-不传 app_name、event_id、Trigger 配置、目标函数、IP、RPC 地址。内部 trace_seq 由本模块生成。
+EventTriggerNotify 独立接收 sourceFuncName、dataAddr、dataSize。外部 Actor 的 sourceFuncName 为空字符串。
+
+不传 AppName、EventID、Trigger 配置、目标函数、PayloadType、DataRef、IP 或 RPC 地址。
 
 ## D.3 TaskInvocation 最小字段
 
 | 字段 | 必须 | 说明 |
 |---|---|---|
-| so_name | 是 | 下游加载的 SO 文件 |
-| session_id | 是 | 业务 Session |
-| input_mode | 是 | VALUE / KEY_VALUE / KEY_ONLY |
-| key | 条件必需 | KEY_VALUE / KEY_ONLY |
-| payload_type | 是 | NONE / INLINE / SHARED_MEMORY |
-| data_size | 是 | 输入长度；NONE 为 0 |
-| payload | 条件必需 | Inline 副本或 DataRef |
+| SessionID | 是 | 业务 Session |
+| Function.SOName | 是 | 下游识别的 SO 文件名 |
+| Function.FuncName | 是 | 目标函数标识 |
+| Function.Resource | 是 | 完整 CPU / Memory / GPU / Disk / Network 静态资源需求；Router 本期只检查 CPU / Memory |
+| InputMode | 是 | InputValue / InputKeyValue / InputKeyOnly |
+| Args | 是 | 参数数组；当前长度为 1 |
 
-不传 app_name、bucket、task_id、event_id、source_function、trigger_name、source_type、resource、execution、handler 名称。
+每个 TaskArgument 包含必填 Key、DataAddr 和 DataSize。DataAddr 在 DataSize 大于 0 时必须非空。
 
-## D.4 输入模式和 Payload
+## D.4 输入模式
 
-| 路径 | 输入模式 | INLINE | SHARED_MEMORY |
-|---|---|---|---|
-| DIRECT | INPUT_VALUE | 复制 Value | retain DataRef |
-| Trigger option 0 | INPUT_VALUE | 复制 Value | retain DataRef |
-| Trigger option 1 | INPUT_KEY_VALUE | 复制 Key + Value | Key + retain DataRef |
-| Trigger option 2 | INPUT_KEY_ONLY | 仅 Key | 仅 Key，不 retain |
+| 路径 | 输入模式 | Function 输入语义 |
+|---|---|---|
+| DIRECT | InputValue | Value |
+| Trigger option 0 | InputValue | Value |
+| Trigger option 1 | InputKeyValue | Key + Value |
+| Trigger option 2 | InputKeyOnly | Key Only |
 
-Payload Type 由 Data SDK 决定；Input Mode 由 DIRECT 规则或 Trigger Option 决定。
+Key 在 TaskArgument 中始终必填。InputMode 只决定 Function 输入视图，不决定数据载体。
 
-## D.5 DataRef 所有权
+## D.5 数据地址所有权
 
-1. Data SDK 在通知期间持有基础引用。
-2. Task Builder 对每个需要 Value 的 Task 独立 retain。
-3. Router 获得 TaskInvocation 后持有该引用。
-4. Pool 返回 ACCEPTED 后接管引用。
-5. Pool 拒绝时不接管；若进入 Delay Queue，Router 继续持有。
-6. Delay Queue 成功重试后 Pool 接管；超时、关闭或终止错误由 Router release。
-7. KEY_ONLY 不 retain。
-8. 所有引用必须最终归零。
+1. 上游 Data SDK 在 Session 生命周期内持有数据内存。
+2. EventTriggerNotify 只借用 dataAddr，不复制、不释放。
+3. Task Builder 为每个目标构建独立 TaskArgument 描述符，但共享同一 dataAddr。
+4. Router 在 Delay Queue 中保留 TaskInvocation 元数据副本，不拥有数据内存。
+5. Pool Accepted 后接收任务描述符副本，不接管 dataAddr 所有权。
+6. Pool / Router 均不得 free、munmap 或释放 dataAddr。
+7. Data SDK 管控 Session 完成判定和回收，Scheduler 不承担该机制。
+8. 一个 Task 完成不能导致同一 Session 其他 Task 正在使用的数据被回收。
 
 ## D.6 DIRECT 与 Trigger 路径
 
-- source_function 有 DIRECT targets：构建 DIRECT Task，跳过 Bucket Trigger。
-- source_function 为空或无 DIRECT targets：执行 Bucket Trigger 匹配。
+- sourceFuncName 有 DIRECT targets：构建 DIRECT Task，跳过 Bucket Trigger。
+- sourceFuncName 为空或无 DIRECT targets：执行 Bucket Trigger 匹配。
 - 一个 DIRECT source 对应多个 target 时，每个 target 生成独立 Task。
 - 一个 Bucket 多条 Trigger 命中时，每条规则生成独立 Task，不去重。
-- DIRECT 默认 INPUT_VALUE；Trigger 按 trigger_option 决定输入模式。
+- DIRECT 默认 InputValue；Trigger 按 trigger_option 决定输入模式。
 
-## D.7 Pool 返回码与 Router 行为
+## D.7 Pool 返回值与 Router 行为
 
-| Pool 返回 | Router 行为 | 是否入队 | DataRef 归属 |
-|---|---|---:|---|
-| ACCEPTED | 删除 Router PendingTask | 是 | Pool |
-| NO_CAPACITY + Delay enabled | 放入 Delay Queue | 否 | Router |
-| NO_CAPACITY + Delay disabled | 记录 PROCESS_DISPATCH_REQUIRED，释放 | 否 | 释放 |
-| NOT_READY | 终止并记录错误 | 否 | 释放 |
-| INVALID_TASK | 终止并记录错误 | 否 | 释放 |
-| ERROR | 终止并记录错误 | 否 | 释放 |
-| Delay expired | 记录 TASK_DELAY_EXPIRED | 否 | 释放 |
+| Pool 返回 | Router 行为 | 是否入队 |
+|---|---|---:|
+| Accepted | 删除 Router PendingTask；Pool 接管任务描述符副本 | 是 |
+| NoCapacity + Delay enabled | 放入 Delay Queue | 否 |
+| NoCapacity + Delay disabled | 记录 PROCESS_DISPATCH_REQUIRED，释放 Router 元数据 | 否 |
+| Error | 终止并记录内部错误 | 否 |
+| Delay expired | 记录 TASK_DELAY_EXPIRED，释放 Router 元数据 | 否 |
 
-## D.8 错误码
+CPU / Memory 资源不足、探测失败和计算失败发生在 TryEnqueue 之前，不调用 Pool。三者均记录原因后判断 scheduler.delay_queue.enabled：启用则暂存重试，否则终止本次路由。与 Pool NoCapacity 共用同一 Delay Queue；Pool Error 不延时。
 
-| 值 | 名称 | 语义 |
-|---:|---|---|
-| 0 | PM_OK | 处理完成；未命中不是错误 |
-| -1 | PM_ERR_INVALID_ARGUMENT | 参数为空或格式错误 |
-| -2 | PM_ERR_CONFIG | app.json 解析或校验失败 |
-| -3 | PM_ERR_DUPLICATE_APP | app_name 已注册 |
-| -4 | PM_ERR_DUPLICATE_BUCKET | Bucket 全局重复 |
-| -5 | PM_ERR_DUPLICATE_FUNCTION | Function / SO 冲突 |
-| -6 | PM_ERR_UNKNOWN_BUCKET | 未注册 Bucket |
-| -7 | PM_ERR_UNKNOWN_FUNCTION | 未注册来源或目标 SO |
-| -8 | PM_ERR_INVALID_DEPENDENCY | DIRECT 配置非法 |
-| -9 | PM_ERR_INVALID_TRIGGER | Trigger 配置非法 |
-| -10 | PM_ERR_INVALID_PAYLOAD | Payload 字段不一致 |
-| -11 | PM_ERR_DATA_REF | DataRef validate / retain 失败 |
-| -12 | PM_ERR_NO_MEMORY | 内存不足 |
-| -13 | PM_ERR_REGISTRY_SEALED | Registry 已 seal |
-| -14 | PM_ERR_POOL_REGISTER | Pool 静态 Function 注册失败 |
-| -15 | PM_ERR_INTERNAL | 内部不变量破坏 |
-| -16 | PM_ERR_GLOBAL_SCHEDULER_CONFIG_CONFLICT | 后续 App 的进程级 Delay Queue 配置与首个成功注册的配置不一致 |
+## D.8 错误语义
+
+EventTriggerNotify 使用 Go error：
+
+| 类别 | 语义 |
+|---|---|
+| nil | 通知处理流程正常完成；无 Trigger 命中不是错误 |
+| ErrNotInitialized | 模块尚未初始化 |
+| ErrInvalidArgument | 参数为空、格式错误、Bucket 不存在或 sourceFuncName 不属于当前 App |
+| ErrInternal | 内部不变量破坏或不可恢复错误 |
+
+TriggerInit 的配置读取、JSON 解析、字段校验和索引构建错误通过 error 返回，错误信息应包含文件路径和字段路径。
 
 ## D.9 Delay Queue 配置和状态
 
-Delay Queue 为进程级全局配置：首个成功注册的 App 建立配置，后续 App 必须声明完全相同的配置。具体字段：
+Delay Queue 为进程级全局配置。多个 App 声明的配置必须完全相同。具体字段：
 
 - enabled：是否启用。
-- retry_interval_ms：两次提交尝试的最小间隔。
-- max_wait_ms：从首次 NO_CAPACITY 到终止的最大等待时长。
+- retry_interval_ms：资源复查及可能的提交尝试之间的重试间隔；下一次唤醒不晚于固定 deadline。
+- max_wait_ms：从首次资源不足、探测失败、计算失败或 Pool NoCapacity 到终止的最大等待时长；后续重试及原因变化不重置 deadline。
 
-时间使用单调时钟。队列达到实现级容量上限时，拒绝新项并释放 Router 持有资源。Delay Queue 只重试提交，不重新执行已经进入 Pool 的 Function。
+每次重试先查到期，再执行资源检查；调用 TryEnqueue 前再次查到期。持续失败按 retry_interval_ms 重试直到 deadline，日志区分具体原因。
+
+时间使用单调时钟。队列达到实现级容量上限时，拒绝新项并释放 Router 持有的元数据。Delay Queue 只重试提交，不重新执行已经进入 Pool 的 Function。

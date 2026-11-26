@@ -135,5 +135,3 @@ Delay Queue 为进程级全局配置。多个 App 声明的配置必须完全相
 每次重试先查到期，再执行资源检查；调用 TryEnqueue 前再次查到期。持续失败按 retry_interval_ms 重试直到 deadline，日志区分具体原因。
 
 时间使用单调时钟。队列达到实现级容量上限时，拒绝新项并释放 Router 持有的元数据。Delay Queue 只重试提交，不重新执行已经进入 Pool 的 Function。
-
-增量设计：[附录 F：扩展触发与资源准入](F-V0.6扩展触发与资源准入.md)。扩展规则可聚合多个通知并生成多项 Args；CPU / Memory 必查，GPU / Disk / Network 按需求检查。现有基础场景及其测试输入保留，新增场景按附录 F 验收。

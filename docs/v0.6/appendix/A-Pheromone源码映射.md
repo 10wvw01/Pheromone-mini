@@ -42,7 +42,7 @@ Pheromone 的 Trigger 输入核心是 BucketKey（Bucket、Key、Session）；Tr
 - [trigger.hpp：BucketKey、TriggerAction、ImmediateTrigger、ByNameTrigger](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/common/include/trigger.hpp)
 - [notify_handler.cpp：遍历 Bucket Trigger 列表](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/coordinator/notify_handler.cpp)
 
-V0.6 保留 Immediate、ByName、同 Bucket 多 Trigger 独立匹配和 Trigger Option 0 / 1 / 2。V0.6 扩展原语的实现范围见附录 F。
+V0.6 保留 Immediate、ByName、同 Bucket 多 Trigger 独立匹配和 Trigger Option 0 / 1 / 2。V0.6 支持集合、投票、批处理与分组触发，详见核心模块详细设计。
 
 ## A.5 Data Bucket 与通知字段
 
@@ -77,5 +77,3 @@ FunctionInfo 随每个 TaskInvocation 通过 TryEnqueue 传递，不通过单独
 - 不实现 DataRef、validate、retain、release 和双载体选择。
 - 不实现 Pool 静态 Function 注册、Execution 配置或本模块内 SO Loader。
 - 不实现 Task Coroutine Pool 内部队列、协程和 Function 执行。
-
-增量设计：[附录 F：扩展触发与资源准入](F-V0.6扩展触发与资源准入.md)。扩展规则可聚合多个通知并生成多项 Args；CPU / Memory 必查，GPU / Disk / Network 按需求检查。现有基础场景及其测试输入保留，新增场景按附录 F 验收。

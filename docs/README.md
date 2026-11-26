@@ -2,7 +2,7 @@
 
 **当前唯一有效设计基线：[V0.6 完整软件设计方案](V0.6-完整软件设计方案.md)**
 
-V0.6 使用 Go 实现。上游仅有 TriggerInit 和 EventTriggerNotify 两个 API；配置仅使用用户自行编写的 app.json，Function 配置内嵌 functions[]；DIRECT 为独立依赖路径；Bucket Trigger 支持 Immediate / ByName 及附录 F 扩展原语；下游 Pool 唯一交互为不带 ctx 的 TryEnqueue(TaskInvocation)。
+V0.6 使用 Go 实现。上游仅有 TriggerInit 和 EventTriggerNotify 两个 API；配置仅使用用户自行编写的 app.json，Function 配置内嵌 functions[]；DIRECT 为独立依赖路径；Bucket Trigger 支持 Immediate / ByName 以及集合、投票、条数 / 时间批处理、分组触发原语；下游 Pool 唯一交互为不带 ctx 的 TryEnqueue(TaskInvocation)。
 
 ## V0.6 文档
 
@@ -43,5 +43,3 @@ V0.6 使用 Go 实现。上游仅有 TriggerInit 和 EventTriggerNotify 两个 A
 - [V0.4 主文档与配套文件](archive/v0.4/README.md)
 - [V0.3 主文档与配套文件](archive/v0.3/README.md)
 - [归档规则](archive/README.md)
-
-增量设计：[附录 F：扩展触发与资源准入](v0.6/appendix/F-V0.6扩展触发与资源准入.md)。扩展规则可聚合多个通知并生成多项 Args；CPU / Memory 必查，GPU / Disk / Network 按需求检查。现有基础场景及其测试输入保留，新增场景按附录 F 验收。

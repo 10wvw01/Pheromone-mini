@@ -164,7 +164,7 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
 | functions[] | object | 直接包含下表 Function 字段；不接受外部配置路径 |
 | buckets | array(string) | 必填；跨 App 全局唯一 |
 | dependencies | array(object) | 可为空；DIRECT / MANY_TO_ONE / K_OUT_OF_N |
-| triggers | array(object) | 可为空；IMMEDIATE / BY_NAME 及附录 F 扩展原语 |
+| triggers | array(object) | 可为空；IMMEDIATE / BY_NAME 以及集合、投票、条数 / 时间批处理、分组触发原语 |
 
 ### functions[] 每项字段（下列路径均相对该项）
 
@@ -182,7 +182,7 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
 | resource.disk_mb | integer | 可选；默认 0；非负 |
 | resource.network_mbps | integer | 可选；默认 0；非负 |
 
-Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为可选资源需求，由 Task Router 按附录 F 独立进行准入判断。
+Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为可选资源需求，由 Task Router 按工程实现设计 §14.7 独立进行准入判断。
 
 ### DIRECT Dependency
 
@@ -208,6 +208,30 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 
 trigger_option：0=Value，1=Key+Value，2=Key Only。DIRECT 不使用 trigger_option，固定以 Value 作为目标输入。
 
+### 汇聚、投票和批处理
+
+| 类型 | 新字段（相对所在对象） | 约束 |
+|---|---|---|
+| dependencies[] MANY_TO_ONE | src_functions、tgt_functions | 至少两个不同来源、至少一个目标；全部引用当前 App 的 func_name |
+| dependencies[] K_OUT_OF_N | src_functions、tgt_functions、description.k、description.n | 1 ≤ k ≤ n，n 必须等于不同来源的数量；投票由目标函数执行 |
+| triggers[] BY_SET | primitive.function、primitive.key_set | 非空且不重复的 Key 列表 |
+| triggers[] REDUNDANT | primitive.function、primitive.key_set、primitive.k、primitive.n | 1 ≤ k ≤ n，n 等于 key_set 长度 |
+| triggers[] BY_BATCH_SIZE | primitive.function、primitive.count、primitive.time_window（可选，毫秒） | 正整数 count；达到条数立即触发，有窗口时到期提交非空余批 |
+| triggers[] BY_TIME | primitive.function、primitive.time_window（毫秒） | 首条数据开启窗口，到期提交非空批 |
+| triggers[] DYNAMIC_GROUP | primitive.function、primitive.control_group、primitive.data_group | 两个非空、内部无重复、互不重叠的 Key 列表；收齐两组后触发，只传 data_group |
+
+新规则拒绝未知字段、空标识、非法引用和数值越界。窗口毫秒值遵守下列换算边界；每条规则最多收集 4096 项。
+
+### 资源探测配置
+
+| 路径 | 约束 |
+|---|---|
+| scheduler.resource_probe.disk_path | 有磁盘需求时必填；已存在的绝对路径 |
+| scheduler.resource_probe.network_interface | 有网络需求时必填；目标网卡名 |
+| scheduler.resource_probe.network_limit_mbps | 有网络需求时必填；部署方提供的正整数带宽上限，单位 Mbps |
+
+各维度准入算法见工程实现设计 §14.7。
+
 ## B.5 校验规则
 
 1. 拒绝非法 JSON、重复字段、未知字段、错误类型和超长输入。
@@ -218,7 +242,7 @@ trigger_option：0=Value，1=Key+Value，2=Key Only。DIRECT 不使用 trigger_o
 6. 同一 so_name + func_name 被多个 App 复用时，Resource 必须一致。
 7. 每条 DIRECT 配置必须只有一个 src_functions 项，tgt_functions 至少一个；来源和目标都必须存在。
 8. Trigger 的 Bucket 和目标 func_name 必须存在；trigger_name 在 App 内唯一。
-9. 接受 IMMEDIATE、BY_NAME 及附录 F 扩展原语；ByName 必须配置非空 key_name，Immediate 禁止 key_name。
+9. 接受 IMMEDIATE、BY_NAME 以及集合、投票、条数 / 时间批处理、分组触发原语；ByName 必须配置非空 key_name，Immediate 禁止 key_name。
 10. trigger_option 只允许 0、1、2。
 11. Delay Queue enabled 必须为布尔值；时间间隔和最大等待时间必须为正整数。
 12. 拒绝 execution、resource.timeout_ms、DataRef 和旧的双数据载体字段；Resource 中 GPU、Disk、Network 数值必须非负。
@@ -227,4 +251,23 @@ trigger_option：0=Value，1=Key+Value，2=Key Only。DIRECT 不使用 trigger_o
 15. retry_interval_ms / max_wait_ms 换算 time.Duration 前检查 int64 纳秒上限；memory_mb 换算字节前检查 uint64 上限。超界在 TriggerInit 阶段拒绝，不留到运行时反复延时；运行时样本计算仍做防御检查。
 16. 多 App 的 delay_queue 三项有效配置必须完全一致；不一致拒绝当前 App，不改动已发布 Registry 和进程级延时配置。
 
-增量设计：[附录 F：扩展触发与资源准入](F-V0.6扩展触发与资源准入.md)。扩展规则可聚合多个通知并生成多项 Args；CPU / Memory 必查，GPU / Disk / Network 按需求检查。现有基础场景及其测试输入保留，新增场景按附录 F 验收。
+
+## B.6 汇聚与资源配置示例
+
+可将以下对象分别并入现有 app.json 的 dependencies、triggers 和 scheduler（函数与 Bucket 引用沿用对应 App 配置）：
+
+~~~json
+{
+  "dependencies": [
+    {"type":"K_OUT_OF_N","src_functions":["replica_a","replica_b","replica_c"],"tgt_functions":["vote"],"description":{"k":2,"n":3}}
+  ],
+  "triggers": [
+    {"bucket":"b_shared","trigger_name":"t_batch","primitive_type":"BY_BATCH_SIZE","primitive":{"function":"processor","count":32,"time_window":100},"trigger_option":0}
+  ],
+  "scheduler": {
+    "resource_probe":{"disk_path":"/var/lib/pheromone","network_interface":"eth0","network_limit_mbps":1000}
+  }
+}
+~~~
+
+这里的 scheduler 示例为新增子字段，原 delay_queue 仍必填。时间窗口表达的是收到首条数据后的成批等待，不引入无数据也定时运行的 PERIODIC 调度。

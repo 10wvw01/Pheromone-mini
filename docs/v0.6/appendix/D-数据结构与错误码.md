@@ -63,7 +63,7 @@ EventTriggerNotify 独立接收 sourceFuncName、dataAddr、dataSize。外部 Ac
 | SessionID | 是 | 业务 Session |
 | Function.SOName | 是 | 下游识别的 SO 文件名 |
 | Function.FuncName | 是 | 目标函数标识 |
-| Function.Resource | 是 | CPU / Memory 资源需求 |
+| Function.Resource | 是 | 完整 CPU / Memory / GPU / Disk / Network 静态资源需求；Router 本期只检查 CPU / Memory |
 | InputMode | 是 | InputValue / InputKeyValue / InputKeyOnly |
 | Args | 是 | 参数数组；当前长度为 1 |
 

@@ -59,6 +59,11 @@ type TaskInvocation struct {
 
 ## C.2 两个上游 API
 
+| API ID | API |
+|---|---|
+| PM-API-001 | TriggerInit |
+| PM-API-002 | EventTriggerNotify |
+
 ~~~go
 func TriggerInit(appJSONPath string) error
 
@@ -70,11 +75,13 @@ func EventTriggerNotify(
 ) error
 ~~~
 
-TriggerInit 只接收 app.json 路径。模块自行读取 app.json，并按相对路径加载其引用的 function.json。
+用户根据附录 B 自行编写 app.json。全部初始化成功结束后才允许发送通知，禁止初始化与通知并发；初始化未完成返回 ErrNotInitialized。完整状态规则见第三部分 §11.6。
+
+TriggerInit 只接收 app.json 路径。模块自行读取 app.json，并解析内嵌 functions[]。
 
 EventTriggerNotify 的 DataReadyEvent 只包含 Bucket、Key、SessionID。sourceFuncName、dataAddr、dataSize 是独立参数。外部 SMC Actor 的 sourceFuncName 使用空字符串。
 
-## C.3 TryEnqueue 下游接口
+## C.3 POOL-API-001：TryEnqueue 下游接口
 
 ~~~go
 type EnqueueResult uint8
@@ -90,7 +97,8 @@ type TaskPool interface {
 }
 ~~~
 
-- TryEnqueue 是下游 Pool 唯一向本模块提供的接口。
+- TryEnqueue 是下游 Pool 唯一向本模块提供的接口；本模块不负责实例创建或装配。
+- 首次提交和每次延时重试必须先做 CPU / Memory 检查；不足或探测 / 计算失败仅打印日志并终止本次路由，不调用 Pool。
 - 不带 ctx 参数；Pool 实例自身持有队列和运行状态。
 - 不提供 register_function、unregister_function、register_function_configs 或 wake_one。
 - TaskInvocation 携带完整 FunctionInfo（SOName、FuncName、Resource），不需要 Pool 启动阶段静态注册。
@@ -129,11 +137,11 @@ EventTriggerNotify 使用 Go error，不定义大型状态码枚举：
 | 错误 | 语义 |
 |---|---|
 | nil | 通知处理流程正常完成；无 Trigger 命中也属于正常处理 |
-| ErrNotInitialized | 尚未成功初始化 |
+| ErrNotInitialized | 尚未成功初始化或初始化尚未结束 |
 | ErrInvalidArgument | 事件或参数不合法 |
 | ErrInternal | 不可恢复的内部错误 |
 
-TriggerInit 失败时返回带文件路径、字段路径和底层原因的 error。资源不足、无 Trigger 命中和 Pool NoCapacity 不扩展为上游 API 错误码。
+TriggerInit 失败时返回带文件路径、字段路径和底层原因的 error。资源不足、资源探测 / 准入计算失败、无 Trigger 命中和 Pool NoCapacity 不扩展为上游 API 错误码。
 
 ## C.7 所有权与生命周期
 
@@ -143,7 +151,7 @@ TriggerInit 失败时返回带文件路径、字段路径和底层原因的 erro
 | sourceFuncName | 上游 SDK / TaskContext | DIRECT 匹配 | 上游保证调用期间有效 |
 | Key / SessionID 字符串 | 上游 SDK | Task Builder / Pool / Function | Task Builder 复制异步任务所需字符串 |
 | TaskInvocation / Args | Task Builder | Router / Pool | Router 或 Pool 管理自己的描述符副本 |
-| DataAddr 指向的数据 | 上游 Data SDK | Task Builder / Pool / Function | 上游在 Session 结束且所有相关任务终态后回收 |
+| DataAddr 指向的数据 | 上游 Data SDK | Task Builder / Pool / Function | Data SDK 自行判定完成并回收；本模块不提供完成判定契约 |
 
 不可违反的规则：
 
@@ -151,6 +159,6 @@ TriggerInit 失败时返回带文件路径、字段路径和底层原因的 erro
 2. Scheduler 和 Pool 不得释放 DataAddr。
 3. Task Builder 不复制数据内容，只构建参数描述符。
 4. 一个事件命中多个 Task 时，所有 Task 都可能访问同一 DataAddr。
-5. 上游必须将 Delay Queue 中的待提交任务也视为未完成任务。
-6. Session 数据回收必须发生在该 Session 所有相关任务完成或终止之后。
+5. Data SDK 保证 Delay Queue 和异步执行期间借用地址有效。
+6. Session 完成判定及数据回收由 Data SDK 管控，本模块不定义完成通知、引用计数或回收协议。
 7. DataAddr 应指向上游管理的共享内存 / mmap 区域，不应指向未固定的 Go Heap 对象。

@@ -88,7 +88,7 @@ Key 在 TaskArgument 中始终必填。InputMode 只决定 Function 输入视图
 4. Router 在 Delay Queue 中保留 TaskInvocation 元数据副本，不拥有数据内存。
 5. Pool Accepted 后接收任务描述符副本，不接管 dataAddr 所有权。
 6. Pool / Router 均不得 free、munmap 或释放 dataAddr。
-7. Session 结束且该 Session 的所有相关任务完成或终止后，上游统一回收数据。
+7. Data SDK 管控 Session 完成判定和回收，Scheduler 不承担该机制。
 8. 一个 Task 完成不能导致同一 Session 其他 Task 正在使用的数据被回收。
 
 ## D.6 DIRECT 与 Trigger 路径

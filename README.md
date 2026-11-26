@@ -13,17 +13,18 @@
 - [V0.6 上下游接口与协作设计](docs/v0.6/03-接口与协作设计.md)
 - [V0.6 分功能需求列表](docs/v0.6/06-分功能需求列表.md)
 - [V0.6 app.json 示例](docs/v0.6/examples/app.json)
-- [V0.6 function.json 示例](docs/v0.6/examples/functions/producer/function.json)
 - [V0.6 Go 接口示例](docs/v0.6/examples/task_scheduler.go)
 
 ## V0.6 冻结边界
 
 - 实现语言为 Go。
 - 上游只调用 TriggerInit(appJSONPath) 和 EventTriggerNotify(event, sourceFuncName, dataAddr, dataSize) 两个 API。
-- TriggerInit 读取 app.json，并加载其中引用的各个 function.json；function.json 保存单个 Function 的 so_name、func_name 和完整 Resource（CPU / Memory / GPU / Disk / Network）；Task Router 本期只检查 CPU / Memory。
+- 全部 TriggerInit 初始化成功结束后才允许 EventTriggerNotify，禁止初始化与事件通知并发。
+- TriggerInit 读取用户编写的 app.json；functions[] 内嵌每个 Function 的 so_name、func_name 和完整 Resource（CPU / Memory / GPU / Disk / Network）；Task Router 本期只检查 CPU / Memory。
 - DataReadyEvent 仅包含 bucket、key、session_id；数据统一通过 data_addr + data_size 传递，不区分大小数据包，不使用 DataRef。
 - Function 信息通过 TaskInvocation 随 TryEnqueue 传给下游；Pool 接口不带 ctx，不提供独立 Function 注册接口。
-- Task Router 在 TryEnqueue 前检查 CPU / Memory；资源不足不调用 TryEnqueue，进入上报 TODO 分支。
+- Task Router 在 TryEnqueue 前检查 CPU / Memory；资源不足或探测 / 计算失败不调用 TryEnqueue，只打印日志并终止本次路由；延时重试也必查资源。
+- 数据有效性、Session 任务完成判定和回收由 Data SDK 管控；Pool 实例创建与装配由下游 / 集成方负责，本模块仅调用 API。
 - Pool 负责队列消费、协程调度和 Function 加载执行；本模块不规定 Go Plugin、cgo 或 native SO Loader 的具体实现。
 - 不实现 Rerun、resource.timeout_ms、wake_one、跨进程和跨节点调度。
 

@@ -73,7 +73,7 @@ EventTriggerNotify 独立接收 sourceFuncName、dataAddr、dataSize。外部 Ac
 
 | 路径 | 输入模式 | Function 输入语义 |
 |---|---|---|
-| DIRECT | InputValue | Value |
+| DIRECT | 由依赖项 trigger_option 选择；缺省 InputValue | Value / Key + Value / Key Only |
 | Trigger option 0 | InputValue | Value |
 | Trigger option 1 | InputKeyValue | Key + Value |
 | Trigger option 2 | InputKeyOnly | Key Only |
@@ -97,7 +97,7 @@ Key 在 TaskArgument 中始终必填。InputMode 只决定 Function 输入视图
 - sourceFuncName 为空或无 DIRECT targets：执行 Bucket Trigger 匹配。
 - 一个 DIRECT source 对应多个 target 时，每个 target 生成独立 Task。
 - 一个 Bucket 多条 Trigger 命中时，每条规则生成独立 Task，不去重。
-- DIRECT 默认 InputValue；Trigger 按 trigger_option 决定输入模式。
+- DIRECT 读取依赖项的 trigger_option，Bucket Trigger 读取各自的 trigger_option。二者均缺省为 InputValue。
 
 ## D.7 Pool 返回值与 Router 行为
 

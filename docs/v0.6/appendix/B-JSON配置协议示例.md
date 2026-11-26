@@ -191,6 +191,7 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 | type | string | DIRECT / MANY_TO_ONE / K_OUT_OF_N |
 | src_functions | array(string) | 必填；恰好一个来源 func_name |
 | tgt_functions | array(string) | 必填；至少一个目标 func_name |
+| trigger_option | integer | 可选；仅 DIRECT 依赖项支持；0 = Value（默认），1 = Key + Value，2 = Key Only |
 
 来源和目标必须属于同一 App 的 functions。一个来源可对应多个目标；多个来源拆成多条依赖配置。
 
@@ -206,7 +207,7 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 | primitive.key_name | string | BY_NAME 必填；IMMEDIATE 禁止 |
 | trigger_option | integer | 0 / 1 / 2；默认 0 |
 
-trigger_option：0=Value，1=Key+Value，2=Key Only。DIRECT 不使用 trigger_option，固定以 Value 作为目标输入。
+trigger_option：0=Value，1=Key+Value，2=Key Only。每条 DIRECT 依赖可选 `trigger_option`，整数 `0`（默认，Value）、`1`（Key + Value）、`2`（Key Only）。同一条依赖的所有目标使用同一模式，需要不同模式时拆成多条依赖。同一 App 内重复的 DIRECT 来源／目标对在初始化时拒绝。 汇聚与投票依赖保持 Value。
 
 ### 汇聚、投票和批处理
 

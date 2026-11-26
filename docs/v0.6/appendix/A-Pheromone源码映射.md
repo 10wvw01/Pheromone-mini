@@ -32,7 +32,7 @@ Pheromone 的 AppRegistration / DataDependency 使用 DIRECT 类型以及来源�
 - [app_register_handler.cpp：DIRECT 依赖保留](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/coordinator/app_register_handler.cpp)
 - [scheduler_server.cpp：DIRECT 分支优先于 Trigger 检查](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/scheduler/scheduler_server.cpp)
 
-V0.6 保留 DIRECT 独立路径、来源 Function 到多个目标 Function 的映射，以及 DIRECT 优先于 Bucket Trigger 的规则。每条 DIRECT 配置只声明一个 source func_name，多个目标放入 tgt_functions；DIRECT 目标默认 InputValue。
+V0.6 保留 DIRECT 独立路径、来源 Function 到多个目标 Function 的映射，以及 DIRECT 优先于 Bucket Trigger 的规则。每条 DIRECT 配置只声明一个 source func_name，多个目标放入 tgt_functions；DIRECT 的输入模式可由依赖项配置，缺省为 InputValue。固定提交的上游 `DataDependency` 没有 `trigger_option`，本地 DIRECT 分支依据数据打包方式构造参数和 `arg_flag`。0 / 1 / 2 三种输入语义取自上游 Bucket Trigger；在 DIRECT 配置中开放这三项是 V0.6 的设计。
 
 ## A.4 Bucket 与 Trigger
 

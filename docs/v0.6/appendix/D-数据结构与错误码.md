@@ -113,16 +113,7 @@ CPU / Memory 资源不足、探测失败和计算失败发生在 TryEnqueue 之�
 
 ## D.8 错误语义
 
-EventTriggerNotify 使用 Go error：
-
-| 类别 | 语义 |
-|---|---|
-| nil | 通知处理流程正常完成；无 Trigger 命中不是错误 |
-| ErrNotInitialized | 模块尚未初始化 |
-| ErrInvalidArgument | 参数为空、格式错误、Bucket 不存在或 sourceFuncName 不属于当前 App |
-| ErrInternal | 内部不变量破坏或不可恢复错误 |
-
-TriggerInit 的配置读取、JSON 解析、字段校验和索引构建错误通过 error 返回，错误信息应包含文件路径和字段路径。
+两个上游 API 成功返回 `nil`，失败统一返回 `*APIError`，字段为 `StatusCode`（`uint16`）和 `Msg`（非空诊断文本）。调用方以 `errors.As` 提取错误并按状态码分支。类型定义与各接口适用状态见[第三部分 §10.5.6、§10.6](../03-接口与协作设计.md)。下游 `TryEnqueue` 仍只返回 `EnqueueResult`；任务路由结果不直接转换为上游错误。
 
 ## D.9 Delay Queue 配置和状态
 

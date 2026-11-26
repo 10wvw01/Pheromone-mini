@@ -1,8 +1,8 @@
 # Pheromone-mini
 
-单节点、单进程内的数据驱动任务调度与 Trigger 预研，设计与接口示例使用 C11。
+单节点、单进程内的数据驱动任务调度与 Trigger 预研，V0.6 设计与接口示例统一使用 Go。
 
-当前设计基线：**V0.6**。本模块负责 App Registry、DIRECT Dependency、Immediate / ByName Event Trigger、Task Builder 和 Task Router；上游提供 DataReadyEvent 与数据引用，下游提供函数注册和原子任务入队能力。
+当前设计基线：**V0.6**。本模块负责配置初始化、App Registry、DIRECT Dependency、Immediate / ByName Event Trigger、Task Builder 和 Task Router；上游通过两个 API 初始化配置和通知数据事件，下游 Task Coroutine Pool 只提供 TryEnqueue。
 
 ## 当前版本入口
 
@@ -13,16 +13,19 @@
 - [V0.6 上下游接口与协作设计](docs/v0.6/03-接口与协作设计.md)
 - [V0.6 分功能需求列表](docs/v0.6/06-分功能需求列表.md)
 - [V0.6 app.json 示例](docs/v0.6/examples/app.json)
-- [V0.6 C ABI 示例](docs/v0.6/examples/task_scheduler.h)
+- [V0.6 function.json 示例](docs/v0.6/examples/functions/producer/function.json)
+- [V0.6 Go 接口示例](docs/v0.6/examples/task_scheduler.go)
 
 ## V0.6 冻结边界
 
-- 配置只使用一份 app.json；DIRECT 是独立依赖路径，Immediate / ByName 是两种 Bucket Trigger。
-- Bucket 在当前 App Registry 管理的全部 App 范围内全局唯一；DataReadyEvent 不传 app_name。
-- DataReadyEvent 仅携带 Bucket / Key / Session、DIRECT 所需的可选 source_function，以及 Inline 或 Shared-Memory 数据载体。
-- Task Router 通过原子 task_pool_try_enqueue 完成本地资源准入和入队；不调用 wake_one，协程消费和唤醒由 Task Coroutine Pool 内部管理。
-- 本地入队无容量时，按 app.json 全局 Delay Queue 配置等待重试；关闭延时调度或等待超时则记录日志。本期不做进程间、节点间分发。
-- 不实现 Rerun，不定义 resource.timeout_ms，不实现 Node / Process Scheduler、Data Bucket 底层存储传输或 Task Coroutine Pool。
+- 实现语言为 Go。
+- 上游只调用 TriggerInit(appJSONPath) 和 EventTriggerNotify(event, sourceFuncName, dataAddr, dataSize) 两个 API。
+- TriggerInit 读取 app.json，并加载其中引用的各个 function.json；function.json 保存单个 Function 的 so_name、func_name 和 CPU / Memory 资源需求。
+- DataReadyEvent 仅包含 bucket、key、session_id；数据统一通过 data_addr + data_size 传递，不区分大小数据包，不使用 DataRef。
+- Function 信息通过 TaskInvocation 随 TryEnqueue 传给下游；Pool 接口不带 ctx，不提供独立 Function 注册接口。
+- Task Router 在 TryEnqueue 前检查 CPU / Memory；资源不足不调用 TryEnqueue，进入上报 TODO 分支。
+- Pool 负责队列消费、协程调度和 Function 加载执行；本模块不规定 Go Plugin、cgo 或 native SO Loader 的具体实现。
+- 不实现 Rerun、resource.timeout_ms、wake_one、跨进程和跨节点调度。
 
 ## 历史版本
 

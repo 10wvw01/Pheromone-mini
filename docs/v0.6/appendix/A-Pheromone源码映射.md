@@ -32,63 +32,38 @@ Pheromone 的 AppRegistration / DataDependency 使用 DIRECT 类型以及来源�
 - [app_register_handler.cpp：DIRECT 依赖保留](https://github.com/MincYu/pheromone/blob/main/src/coordinator/app_register_handler.cpp)
 - [scheduler_server.cpp：DIRECT 分支优先于 Trigger 检查](https://github.com/MincYu/pheromone/blob/main/src/scheduler/scheduler_server.cpp)
 
-V0.6 保留：
-- DIRECT 是独立依赖路径，不是第三种 Trigger Primitive。
-- 来源 Function 到一个或多个目标 Function 的静态映射。
-- 来源 Function 有 DIRECT 依赖时优先 DIRECT；本次事件不再执行 Bucket Trigger。
-- DIRECT 目标按配置顺序生成独立 Task。
-
-V0.6 简化：
-- 只支持 DIRECT；不支持 MANY_TO_ONE、K_OUT_OF_N、PERIODIC 等依赖类型。
-- 每条 DIRECT 配置建议只声明一个 source function，多个目标放入 tgt_functions。
-- DIRECT 目标默认接收本次提交对象，输入模式为 INPUT_VALUE。
-- 不实现远程目标选择和跨节点转发。
+V0.6 保留 DIRECT 独立路径、来源 Function 到多个目标 Function 的映射，以及 DIRECT 优先于 Bucket Trigger 的规则。每条 DIRECT 配置只声明一个 source func_name，多个目标放入 tgt_functions；DIRECT 目标默认 InputValue。
 
 ## A.4 Bucket 与 Trigger
 
-Pheromone 的 Trigger 输入核心是 BucketKey（Bucket、Key、Session）；Trigger 根据自身配置产生 TriggerAction（目标函数和对应 Session / Key）。Bucket 到 Trigger 的索引是一个列表，一个 Bucket 可以关联多个 Trigger。
+Pheromone 的 Trigger 输入核心是 BucketKey（Bucket、Key、Session）；Trigger 根据自身配置产生 TriggerAction。Bucket 到 Trigger 的索引是一个列表，一个 Bucket 可以关联多个 Trigger。
 
 参考：
 - [trigger.hpp：BucketKey、TriggerAction、ImmediateTrigger、ByNameTrigger](https://github.com/MincYu/pheromone/blob/main/common/include/trigger.hpp)
 - [notify_handler.cpp：遍历 Bucket Trigger 列表](https://github.com/MincYu/pheromone/blob/main/src/coordinator/notify_handler.cpp)
 
-V0.6 保留：
-- Immediate：有效对象到达即命中。
-- ByName：Key 完全相等才命中。
-- 同 Bucket 多 Trigger 独立匹配，不按目标函数去重。
-- Trigger Option 0 / 1 / 2 对应 Value / Key+Value / Key Only。
-
-V0.6 不实现 BySet、ByBatchSize、ByTime、DynamicGroup、Redundant 等 Primitive。
+V0.6 保留 Immediate、ByName、同 Bucket 多 Trigger 独立匹配和 Trigger Option 0 / 1 / 2。V0.6 不实现 BySet、ByBatchSize、ByTime、DynamicGroup、Redundant 等 Primitive。
 
 ## A.5 Data Bucket 与通知字段
 
-Pheromone 的 KVS 通知包含 BucketKeyAddress、Payload、数据地址和通信控制信息。Coordinator 还会维护 Bucket 到 App 的映射，并通过 Trigger 列表生成 FunctionCall。
+Pheromone 的 KVS 通知包含 BucketKeyAddress、Payload、数据地址和通信控制信息。V0.6 裁剪为：
+- DataReadyEvent：bucket、key、session_id；
+- source_func_name：独立参数；
+- data_addr、data_size：独立参数，统一地址传递。
 
-参考：
-- [kvs.proto：KeyNotifyRequest](https://github.com/MincYu/pheromone/blob/main/common/proto/kvs.proto)
-- [common.proto：BucketKeyAddress](https://github.com/MincYu/pheromone/blob/main/common/proto/common.proto)
-- [notify_handler.cpp](https://github.com/MincYu/pheromone/blob/main/src/coordinator/notify_handler.cpp)
-
-V0.6 只要求 Data SDK 提供：
-- bucket、key、session_id；
-- 函数输出场景的 source_function；
-- payload_type、data_size；
-- Inline 数据或不透明 DataRef。
-
-V0.6 不接收 app_name、active_trigger_names、ips、response_address、request_id、trigger_name 或 target_function。Bucket 在当前 Registry 全局唯一，本模块自行反查 App。
+V0.6 不接收 app_name、active_trigger_names、ips、response_address、request_id、trigger_name、target_function、payload_type 或 DataRef。Bucket 在当前 Registry 全局唯一，本模块自行反查 App。
 
 ## A.6 下游执行消息
 
-Pheromone Local Scheduler 向 Executor 发送的本地执行消息核心是函数名、Session、参数模式和参数内容；Trigger 元数据不传给 Executor。
+Pheromone Local Scheduler 向 Executor 发送的本地执行消息核心是函数标识、Session、参数模式和参数内容；Trigger 元数据不传给 Executor。
 
-V0.6 将此思想收敛为 TaskInvocation：
-- so_name
-- session_id
-- input_mode
-- 可选 key
-- payload_type / data_size / Inline 或 DataRef
+V0.6 收敛为 TaskInvocation：
+- SessionID；
+- FunctionInfo：so_name、func_name、resource；
+- InputMode；
+- Args[]：Key、DataAddr、DataSize。
 
-函数级 resource / execution 只在注册阶段一次性传给 Pool，不在每个 Task 重复传递。Pool 自行消费队列和唤醒协程。
+FunctionInfo 随每个 TaskInvocation 通过 TryEnqueue 传递，不通过单独静态注册 API 交付。Pool 自行消费队列和唤醒协程。
 
 参考：[scheduler_server.cpp](https://github.com/MincYu/pheromone/blob/main/src/scheduler/scheduler_server.cpp)、[executor_server.cpp](https://github.com/MincYu/pheromone/blob/main/src/executor/executor_server.cpp)。
 
@@ -96,8 +71,9 @@ V0.6 将此思想收敛为 TaskInvocation：
 
 - 不实现 Coordinator、Node Scheduler、Process Scheduler。
 - 不实现 Warm / Cold Executor 选择。
-- 不实现 Rerun 和 Function 执行超时。
-- 不实现独立 wake_one 调用。
+- 不实现 Rerun、Function 执行超时和独立 wake_one。
 - 不实现跨进程、跨节点任务转发。
 - 不实现 Data Bucket 存储、共享内存分配、1KB 阈值和底层消息传输。
-- 不实现 Task Coroutine Pool 内部队列、协程和 SO Loader。
+- 不实现 DataRef、validate、retain、release 和双载体选择。
+- 不实现 Pool 静态 Function 注册、Execution 配置或本模块内 SO Loader。
+- 不实现 Task Coroutine Pool 内部队列、协程和 Function 执行。

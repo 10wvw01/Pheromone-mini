@@ -32,7 +32,7 @@ V0.6 使用 Go 实现。上游仅有 TriggerInit 和 EventTriggerNotify 两个 A
 - 上游 Data Bucket SDK：对象写入与 Commit、提供 bucket/key/session_id 和数据地址，维护 Session 生命周期；Commit 成功后调用 EventTriggerNotify。
 - 本模块：TriggerInit、JSON 解析与校验、内部 Registry、DIRECT 匹配、Bucket Trigger 匹配、Task Builder、CPU / Memory 预检查和 Delay Queue。
 - 下游 Task Coroutine Pool：只提供 TryEnqueue(TaskInvocation)，自行管理队列、协程调度、SO / Function 加载与执行。
-- app.json 保存 App 级 Bucket / DIRECT / Trigger / Delay Queue 配置，并引用单函数 function.json；function.json 保存 so_name、func_name 和 Resource。
+- app.json 保存 App 级 Bucket / DIRECT / Trigger / Delay Queue 配置，并引用单函数 function.json；function.json 保存 so_name、func_name 和完整 Resource（CPU / Memory / GPU / Disk / Network）；Task Router 本期只检查 CPU / Memory。
 - 不实现 DataRef、双数据载体、Pool 静态 Function 注册、Execution 配置、Rerun、跨进程 / 节点调度。
 
 ## 历史版本

@@ -13,7 +13,7 @@ V0.6 使用 Go 实现。上游仅有 TriggerInit 和 EventTriggerNotify 两个 A
 | [02-核心模块详细设计](v0.6/02-核心模块详细设计.md) | JSON Parser、Registry、DIRECT、Trigger、Task Builder、Task Router |
 | [03-接口与协作设计](v0.6/03-接口与协作设计.md) | 两个上游 API 和下游 TryEnqueue 契约 |
 | [04-工程实现设计](v0.6/04-工程实现设计.md) | Go 工程结构、并发、所有权、资源探测和 Delay Queue |
-| [05-需求追踪与测试验收](v0.6/05-需求追踪与测试验收.md) | 测试矩阵、验收标准、上下游联调 |
+| [05-需求追踪与测试验收](v0.6/05-需求追踪与测试验收.md) | 独立验收、Mock 端到端、真实联调及分阶段门槛 |
 | [06-分功能需求列表](v0.6/06-分功能需求列表.md) | 按模块拆分的 P0 功能需求和责任边界 |
 
 ## V0.6 附录与示例
@@ -22,6 +22,7 @@ V0.6 使用 Go 实现。上游仅有 TriggerInit 和 EventTriggerNotify 两个 A
 - [附录 B：app.json 配置协议](v0.6/appendix/B-JSON配置协议示例.md)
 - [附录 C：Go 接口与 Task 契约](v0.6/appendix/C-Go接口与Task契约.md)
 - [附录 D：数据结构、所有权与错误码](v0.6/appendix/D-数据结构与错误码.md)
+- [附录 E：Mock 端到端测试与独立验收](v0.6/appendix/E-Mock端到端测试与独立验收.md)
 - [app.json 示例](v0.6/examples/app.json)
 - [Go API 与 Task 类型示例](v0.6/examples/task_scheduler.go)
 - [Go Producer / Processor 示例](v0.6/examples/)

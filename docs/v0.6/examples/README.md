@@ -10,3 +10,5 @@
 - direct_processor.go：消费 DIRECT 输入。
 
 Go 示例只展示数据处理和调度接口契约，不定义下游 Pool 的动态库加载方式。示例不实现 Data SDK、Task Coroutine Pool、共享内存池或协程调度。
+
+端到端测试环境另见[附录 E](../appendix/E-Mock端到端测试与独立验收.md)：本目录接口 / Function 示例不是可执行验收框架，不应据此标记 Mock E2E 已通过。

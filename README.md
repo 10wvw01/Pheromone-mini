@@ -12,6 +12,7 @@
 - [V0.6 核心模块详细设计](docs/v0.6/02-核心模块详细设计.md)
 - [V0.6 上下游接口与协作设计](docs/v0.6/03-接口与协作设计.md)
 - [V0.6 分功能需求列表](docs/v0.6/06-分功能需求列表.md)
+- [V0.6 Mock 端到端与独立验收](docs/v0.6/appendix/E-Mock端到端测试与独立验收.md)
 - [V0.6 app.json 示例](docs/v0.6/examples/app.json)
 - [V0.6 Go 接口示例](docs/v0.6/examples/task_scheduler.go)
 

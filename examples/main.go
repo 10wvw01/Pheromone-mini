@@ -25,7 +25,7 @@ func main() {
 }
 
 func run() error {
-	// 本地演示用临时 Pool。Router 自行探测资源并决定是否入队。
+	// 创建供示例运行使用的临时 Pool。
 	pool := mockpool.New(4)
 	scheduler := engine.New(engine.Dependencies{Pool: pool})
 	defer scheduler.Close()

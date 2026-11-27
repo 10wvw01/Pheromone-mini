@@ -6,8 +6,6 @@
 go run ./examples
 ```
 
-Trigger 内部使用 Linux 资源探测。运行环境需要可读的资源文件、可见的 cgroup 挂载及足够的 CPU 和内存。
-
 程序先调用真实的 `api.TriggerInit` 注册三个 App，再由示例 SDK 调用真实的 `api.EventTriggerNotify`。Mock Pool 逐项出队，消费任务携带的批数据地址。示例校验 10 个任务的顺序、五字段入队契约、各 App 的最终结果，以及 BY_NAME 不命中和 DIRECT 抢占普通规则的行为。任何校验失败都会以非零状态退出，成功时最后一行是 `E2E passed`。
 
 ## 三个 App 的调用链
@@ -47,6 +45,6 @@ Trigger 内部使用 Linux 资源探测。运行环境需要可读的资源文�
 
 - [upstream.go](upstream.go) 展示上游接入。初始化及提交数据时，分别调用 `api.TriggerInit` 和 `api.EventTriggerNotify`。
 - 仓库根目录的 [mockpool](../mockpool/pool.go) 是 Trigger 可注入的简易下游 Pool，实现有界、非阻塞的进程内队列。
-- [main.go](main.go) 创建临时 Pool，模拟出队执行和 `send_object`。该调用把输出和来源函数标识交给 Data SDK，SDK 保存整批数据后调用 `EventTriggerNotify`。收到通知且命中规则后，Trigger 内部完成资源准入。
+- [main.go](main.go) 创建临时 Pool，模拟出队执行和 `send_object`。该调用把输出和来源函数标识交给 Data SDK，SDK 保存整批数据后调用 `EventTriggerNotify`。
 
-集成方在本仓库模块边界内用 `internal/engine.New` 装配 Pool，通过 `internal/wiring.Install` 安装运行时，随后上游才调用 `api` 包。Go 的 `internal` 可见性限制适用于装配代码，外部 Go 工程可以通过已装配的 `api` 接入业务通知。完整状态和资源准入契约见 [正式设计](../docs/DESIGN.md)。
+集成方在本仓库模块边界内用 `internal/engine.New` 装配 Pool，通过 `internal/wiring.Install` 安装运行时，随后上游才调用 `api` 包。Go 的 `internal` 可见性限制适用于装配代码，外部 Go 工程可以通过已装配的 `api` 接入业务通知。完整接口契约见 [正式设计](../docs/DESIGN.md)。

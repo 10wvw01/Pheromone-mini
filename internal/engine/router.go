@@ -16,6 +16,7 @@ import (
 // pendingTask 持有排队所需的任务元数据和重试时间。最终期限在首次延迟时固定，见 V0.6 §9.5 和 §14.5。
 type pendingTask struct {
 	task          contract.TaskInvocation
+	function      contract.FunctionInfo
 	domain        config.Domain
 	delay         config.Delay
 	log           *slog.Logger
@@ -78,8 +79,8 @@ func newRouter(d Dependencies) *router {
 }
 
 // submit 按 V0.6 §14.1、§14.5 先执行一次完整提交，出现允许延迟的结果时才安排重试。
-func (r *router) submit(task contract.TaskInvocation, domain config.Domain, delay config.Delay, log *slog.Logger) {
-	p := &pendingTask{task: task, domain: domain, delay: delay, log: log}
+func (r *router) submit(task contract.TaskInvocation, function contract.FunctionInfo, domain config.Domain, delay config.Delay, log *slog.Logger) {
+	p := &pendingTask{task: task, function: function, domain: domain, delay: delay, log: log}
 	if r.attempt(p) {
 		r.schedule(p, false)
 	}
@@ -104,13 +105,13 @@ func (r *router) attempt(p *pendingTask) bool {
 		return false
 	}
 	// §14.5 要求每次重试先检查资源。采集可能等待，因此完成后再次检查期限和取消状态。
-	s, err := r.probe.Read(r.ctx, p.domain, p.task.Function)
+	s, err := r.probe.Read(r.ctx, p.domain, p.function)
 	if r.stopAttempt(p) {
 		return false
 	}
 	dimension := ""
 	if err == nil {
-		dimension, err = resource.Evaluate(p.task.Function.Resource, s)
+		dimension, err = resource.Evaluate(p.function.Resource, s)
 	}
 	if err != nil {
 		return r.deferTask(p, "RESOURCE_PROBE_FAILED", "probe_failure_reason", resource.Reason(err), "error", err)
@@ -119,7 +120,7 @@ func (r *router) attempt(p *pendingTask) bool {
 		return r.deferTask(p, "RESOURCE_INSUFFICIENT", "dimension", dimension,
 			"cpu_available", s.CPUAvailable, "memory_available", s.MemoryAvailable,
 			"disk_available", s.DiskAvailable, "network_available", s.NetworkAvailable,
-			"sample_time", s.SampleTime, "source", s.Source, "resource_request", p.task.Function.Resource)
+			"sample_time", s.SampleTime, "source", s.Source, "resource_request", p.function.Resource)
 	}
 	if r.pool == nil {
 		p.log.Error("POOL_ERROR", "reason", "Pool is not assembled", "delay_state", "terminated")

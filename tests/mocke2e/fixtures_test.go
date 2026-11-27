@@ -61,14 +61,13 @@ func newPool(capacity, outputs int) *fakePool {
 func (p *fakePool) TryEnqueue(task api.TaskInvocation) api.EnqueueResult {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	id := task.Function.FuncName
+	id := task.FuncName
 	attempt := p.calls[id]
 	p.calls[id]++
 	result := api.EnqueueAccepted
 	if attempt < len(p.script[id]) {
 		result = p.script[id][attempt]
 	}
-	task.Args = slices.Clone(task.Args)
 	if result == api.EnqueueAccepted {
 		select {
 		case p.queue <- task:
@@ -76,8 +75,6 @@ func (p *fakePool) TryEnqueue(task api.TaskInvocation) api.EnqueueResult {
 			result = api.EnqueueNoCapacity
 		}
 	}
-	// Audit metadata is independent of the queue and the producer's slice.
-	task.Args = slices.Clone(task.Args)
 	p.attempts = append(p.attempts, poolAttempt{task, result})
 	return result
 }
@@ -85,7 +82,7 @@ func (p *fakePool) TryEnqueue(task api.TaskInvocation) api.EnqueueResult {
 func (p *fakePool) start() {
 	p.worker.Go(func() {
 		for task := range p.queue {
-			f := p.execute[[2]string{task.Function.SOName, task.Function.FuncName}]
+			f := p.execute[[2]string{task.SOName, task.FuncName}]
 			if f == nil {
 				p.output <- execution{task: task, err: errors.New("unknown SO/function")}
 				continue
@@ -110,32 +107,35 @@ func (p *fakePool) audit() []poolAttempt {
 type mockSDK struct {
 	mu        sync.Mutex
 	mem       [][]byte
-	committed map[api.DataReadyEvent]api.TaskArgument
+	committed map[api.DataReadyEvent]api.DataReadyEvent
 	lengths   map[unsafe.Pointer]int
+	events    map[unsafe.Pointer]api.DataReadyEvent
 }
 
-func (s *mockSDK) commit(event api.DataReadyEvent, source api.FunctionIdentity, data string) (api.TaskArgument, error) {
+func (s *mockSDK) commit(event api.DataReadyEvent, source api.FunctionIdentity, data string) (api.DataReadyEvent, error) {
 	s.mu.Lock()
 	a, seen := s.committed[event]
 	if seen {
 		if string(unsafe.Slice((*byte)(a.DataAddr), s.lengths[a.DataAddr])) != data {
 			s.mu.Unlock()
-			return api.TaskArgument{}, errors.New("attempt to overwrite immutable object")
+			return api.DataReadyEvent{}, errors.New("attempt to overwrite immutable object")
 		}
 	} else {
 		buf, err := syscall.Mmap(-1, 0, max(1, len(data)), syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_PRIVATE|syscall.MAP_ANON)
 		if err != nil {
 			s.mu.Unlock()
-			return api.TaskArgument{}, err
+			return api.DataReadyEvent{}, err
 		}
 		copy(buf, data)
 		s.mem = append(s.mem, buf)
-		a = api.TaskArgument{Bucket: event.Bucket, SessionID: event.SessionID, Key: event.Key, DataAddr: unsafe.Pointer(&buf[0])}
+		a = event
+		a.DataAddr = unsafe.Pointer(&buf[0])
+		s.events[a.DataAddr] = a
 		s.committed[event] = a
 		s.lengths[a.DataAddr] = len(data)
 	}
 	s.mu.Unlock()
-	return a, api.EventTriggerNotify(event, source, a.DataAddr)
+	return a, api.EventTriggerNotify(a, source)
 }
 
 func (s *mockSDK) close(t *testing.T) {
@@ -157,21 +157,14 @@ func (s *mockSDK) readObject(addr unsafe.Pointer) (string, error) {
 	return string(unsafe.Slice((*byte)(addr), length)), nil
 }
 
+func (s *mockSDK) batchEvent(addr unsafe.Pointer) api.DataReadyEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.events[addr]
+}
+
 func (s *mockSDK) logicalInput(task api.TaskInvocation) (string, error) {
-	if len(task.Args) != 1 || task.Args[0].Key == "" {
-		return "", errors.New("incorrect argument count or missing key")
-	}
-	a := task.Args[0]
-	switch task.InputMode {
-	case api.InputKeyOnly:
-		return a.Key, nil
-	case api.InputValue:
-		return s.readObject(a.DataAddr)
-	case api.InputKeyValue:
-		value, err := s.readObject(a.DataAddr)
-		return a.Key + "=" + value, err
-	}
-	return "", errors.New("invalid input mode")
+	return s.readObject(task.DataAddr)
 }
 
 type probeStep struct {
@@ -277,7 +270,7 @@ type harness struct {
 func setup(t *testing.T, queue, pending int) *harness {
 	t.Helper()
 	h := &harness{t: t, p: newPool(queue, queue+16), clock: testclock.New(),
-		sdk:   mockSDK{committed: make(map[api.DataReadyEvent]api.TaskArgument), lengths: make(map[unsafe.Pointer]int)},
+		sdk:   mockSDK{committed: make(map[api.DataReadyEvent]api.DataReadyEvent), lengths: make(map[unsafe.Pointer]int), events: make(map[unsafe.Pointer]api.DataReadyEvent)},
 		probe: &probeScript{steps: make(map[string][]probeStep), calls: make(map[string]int)},
 		log:   &logSink{wake: make(chan struct{}, 1)},
 	}
@@ -348,27 +341,21 @@ func checkCode(t *testing.T, err error, code api.StatusCode) {
 	}
 }
 
-func (h *harness) send(bucket, key string, source api.FunctionIdentity, data string) api.TaskArgument {
+func (h *harness) send(bucket, key string, source api.FunctionIdentity, data string) api.DataReadyEvent {
 	h.t.Helper()
-	a, err := h.sdk.commit(api.DataReadyEvent{Bucket: bucket, Key: key, SessionID: "s1"}, source, data)
+	a, err := h.sdk.commit(api.DataReadyEvent{AppName: "e2e", Bucket: bucket, Key: key, SessionID: "s1"}, source, data)
 	checkCode(h.t, err, 0)
 	return a
 }
 
-func (h *harness) expect(target string, mode api.InputMode, a api.TaskArgument, bytes string) {
+func (h *harness) expect(target string, a api.DataReadyEvent, bytes string) {
 	h.t.Helper()
 	select {
 	case result := <-h.p.output:
 		expectedSO := map[string]string{"A": "first.so", "B": "second.so", "C": "second.so"}[target]
-		wantCPU, wantMem := 1.0, uint64(1)
-		if target == "B" {
-			wantCPU, wantMem = 2, 2
-		}
-		if result.err != nil || result.bytes != bytes ||
-			result.task.Function.FuncName != target || result.task.Function.SOName != expectedSO ||
-			result.task.Function.Resource != (api.ResourceSpec{CPUCores: wantCPU, MemoryMB: wantMem}) ||
-			result.task.InputMode != mode || !slices.Equal(result.task.Args, []api.TaskArgument{a}) {
-			h.t.Fatalf("output want %s/%d/%q/%+v, got %+v", target, mode, bytes, a, result)
+		want := api.TaskInvocation{AppName: a.AppName, SOName: expectedSO, FuncName: target, SessionID: a.SessionID, DataAddr: a.DataAddr}
+		if result.err != nil || result.bytes != bytes || result.task != want {
+			h.t.Fatalf("output want %+v/%q, got %+v", want, bytes, result)
 		}
 	case <-time.After(5 * time.Second):
 		h.t.Fatalf("no asynchronous output for %s", target)
@@ -379,7 +366,7 @@ func (h *harness) count(target string, calls, accepted int) {
 	h.t.Helper()
 	gotCalls, gotAccepted := 0, 0
 	for _, a := range h.p.audit() {
-		if a.task.Function.FuncName == target {
+		if a.task.FuncName == target {
 			gotCalls++
 			if a.result == api.EnqueueAccepted {
 				gotAccepted++

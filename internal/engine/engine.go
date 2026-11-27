@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"unsafe"
 
 	"triggerEngine/internal/config"
 	"triggerEngine/internal/contract"
@@ -28,21 +27,13 @@ const (
 	closed
 )
 
-// bucket 保存全局数据桶索引的一项，将名称关联到所属应用和规则，见 V0.6 §5.2、§7.1。
-type bucket struct {
-	app   *config.App
-	rules []config.Rule
-}
-
 // Runtime 持有进程的应用索引与调度器。应用注册结束后索引只读，见 V0.6 §13.1–13.3。
 type Runtime struct {
-	mu      sync.Mutex
-	stage   stage
-	active  sync.WaitGroup
-	apps    map[string]*config.App
-	buckets map[string]bucket
-	funcs   map[contract.FunctionIdentity]contract.ResourceSpec
-	delay   config.Delay
+	mu     sync.Mutex
+	stage  stage
+	active sync.WaitGroup
+	apps   map[string]*config.App
+	delay  config.Delay
 
 	readConfig func(string) ([]byte, error)
 	router     *router
@@ -78,8 +69,7 @@ func New(d Dependencies) *Runtime {
 		d.ReadConfig = readConfig
 	}
 	return &Runtime{
-		apps: make(map[string]*config.App), buckets: make(map[string]bucket),
-		funcs: make(map[contract.FunctionIdentity]contract.ResourceSpec), readConfig: d.ReadConfig,
+		apps: make(map[string]*config.App), readConfig: d.ReadConfig,
 		router: newRouter(d),
 	}
 }
@@ -158,90 +148,63 @@ func (r *Runtime) publish(app *config.App) error {
 	if len(r.apps) != 0 && r.delay != app.Delay {
 		return fmt.Errorf("scheduler.delay_queue: differs from the process configuration")
 	}
-	for name := range app.Buckets {
-		if _, exists := r.buckets[name]; exists {
-			return fmt.Errorf("buckets: name already registered in another App")
-		}
-	}
-	for id, fn := range app.Functions {
-		if spec, exists := r.funcs[id]; exists && spec != fn.Resource {
-			return fmt.Errorf("functions: conflicting resource for a shared SO/function pair")
-		}
-	}
-
 	// 按 §13.1 在所有冲突检查通过后一次更新索引，失败的应用不会留下部分记录。
 	r.apps[app.Name] = app
 	r.delay = app.Delay
-	for name, rules := range app.Buckets {
-		r.buckets[name] = bucket{app: app, rules: rules}
-	}
-	for id, fn := range app.Functions {
-		r.funcs[id] = fn.Resource
-	}
 	return nil
 }
 
 // beginNotify 按 V0.6 §13.1 核对状态、通知参数和数据桶归属，首条有效通知将运行时切换为运行状态。
-func (r *Runtime) beginNotify(event contract.DataReadyEvent, source contract.FunctionIdentity, addr unsafe.Pointer) (bucket, error) {
+func (r *Runtime) beginNotify(event contract.DataReadyEvent, source contract.FunctionIdentity) (*config.App, []config.Rule, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stage != ready && r.stage != running {
-		return bucket{}, apiError(contract.ErrNotInitialized, "runtime is not ready to receive events")
+		return nil, nil, apiError(contract.ErrNotInitialized, "runtime is not ready to receive events")
 	}
-	if event.Bucket == "" || event.Key == "" || event.SessionID == "" || addr == nil {
-		return bucket{}, apiError(contract.ErrInvalidArgument, "event requires bucket, key, session_id and a non-nil data address")
+	if event.AppName == "" || strings.TrimSpace(event.Bucket) == "" || event.Key == "" || event.SessionID == "" || event.DataAddr == nil {
+		return nil, nil, apiError(contract.ErrInvalidArgument, "event requires app_name, bucket, key, session_id and a non-nil data address")
 	}
-	b, ok := r.buckets[event.Bucket]
-	if !ok {
-		return bucket{}, apiError(contract.ErrInvalidArgument, "bucket is not registered")
-	}
-	if b.app == nil {
-		return bucket{}, apiError(contract.ErrInternal, "bucket index has no owning App")
+	app := r.apps[event.AppName]
+	if app == nil {
+		return nil, nil, apiError(contract.ErrInvalidArgument, "app_name is not registered")
 	}
 	if source != (contract.FunctionIdentity{}) {
-		if _, ok := b.app.Functions[source]; !ok {
-			return bucket{}, apiError(contract.ErrInvalidArgument, "source so_name and func_name must identify a function in the bucket's App")
+		if _, ok := app.Functions[source]; !ok {
+			return nil, nil, apiError(contract.ErrInvalidArgument, "source app_name, so_name and func_name must identify a function in the event App")
 		}
 	}
-	// 仅在所有参数检查通过后进入运行状态。
 	r.stage = running
 	r.active.Add(1)
-	return b, nil
+	return app, app.Buckets[event.Bucket], nil
 }
 
-// Notify 按 V0.6 §6.2、§7.5 和 §8.4 选择触发路径，为每个命中项构建独立任务。
-func (r *Runtime) Notify(event contract.DataReadyEvent, source contract.FunctionIdentity, addr unsafe.Pointer) error {
-	b, err := r.beginNotify(event, source, addr)
+// Notify selects DIRECT first, then evaluates the matching App's bucket rules.
+func (r *Runtime) Notify(event contract.DataReadyEvent, source contract.FunctionIdentity) error {
+	app, rules, err := r.beginNotify(event, source)
 	if err != nil {
 		return err
 	}
 	defer r.active.Done()
 
-	// 按 §8.2–8.4 复制各任务的字符串和参数描述，原始数据地址继续由 SDK 管理。
 	dispatch := func(action config.Action, path, rule string) {
 		fn := action.Function
-		fn.SOName, fn.FuncName = strings.Clone(fn.SOName), strings.Clone(fn.FuncName)
-		arg := contract.TaskArgument{
-			Bucket: strings.Clone(event.Bucket), SessionID: strings.Clone(event.SessionID),
-			Key: strings.Clone(event.Key), DataAddr: addr,
-		}
 		task := contract.TaskInvocation{
-			Function: fn, InputMode: action.Mode, Args: []contract.TaskArgument{arg},
+			AppName: app.Name, FuncName: fn.FuncName, SOName: fn.SOName,
+			DataAddr: event.DataAddr, SessionID: strings.Clone(event.SessionID),
 		}
-		log := r.router.log.With("app_name", b.app.Name, "bucket", arg.Bucket,
-			"source_so_name", strings.Clone(source.SOName), "source_func_name", strings.Clone(source.FuncName), "route_path", path, "trigger_name", rule,
-			"so_name", fn.SOName, "func_name", fn.FuncName, "session_id", arg.SessionID,
-			"key", arg.Key, "input_mode", task.InputMode, "args_count", len(task.Args))
-		r.router.submit(task, b.app.Domain, b.app.Delay, log)
+		log := r.router.log.With("app_name", task.AppName, "bucket", strings.Clone(event.Bucket),
+			"source_so_name", strings.Clone(source.SOName), "source_func_name", strings.Clone(source.FuncName),
+			"route_path", path, "trigger_name", rule, "so_name", task.SOName, "func_name", task.FuncName,
+			"session_id", task.SessionID, "key", strings.Clone(event.Key))
+		r.router.submit(task, fn, app.Domain, app.Delay, log)
 	}
-	// 按 §6.2 和 §7.5 优先处理直接依赖。该路径命中后，跳过数据桶触发规则。
-	if actions := b.app.Direct[source]; len(actions) != 0 {
+	if actions := app.Direct[source]; len(actions) != 0 {
 		for _, action := range actions {
 			dispatch(action, "DIRECT", "")
 		}
 		return nil
 	}
-	for _, rule := range b.rules {
+	for _, rule := range rules {
 		if rule.Key == "" || rule.Key == event.Key {
 			dispatch(rule.Action, "TRIGGER", rule.Name)
 		}

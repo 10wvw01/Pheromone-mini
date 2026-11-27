@@ -6,27 +6,21 @@ import (
 	"unsafe"
 )
 
-// DataReadyEvent 只携带已提交对象的数据桶、键和会话标识，见 V0.6 §10.5.1。
+// DataReadyEvent describes a committed batch whose address is owned by the SDK.
 type DataReadyEvent struct {
+	AppName   string
 	Bucket    string
 	Key       string
 	SessionID string
+	DataAddr  unsafe.Pointer
 }
 
-// FunctionIdentity 标识产出数据的共享库和函数。零值表示外部 Actor。
+// FunctionIdentity identifies the producer within its App. The zero value denotes an external Actor.
 type FunctionIdentity struct {
-	SOName   string `json:"so_name"`
-	FuncName string `json:"func_name"`
+	AppName  string
+	SOName   string
+	FuncName string
 }
-
-// InputMode 决定任务向函数提供值、键和值，还是仅提供键，见 V0.6 §10.5.3。
-type InputMode uint8
-
-const (
-	InputValue InputMode = iota
-	InputKeyValue
-	InputKeyOnly
-)
 
 // GPUResourceSpec 描述可见设备的数量和单设备可用显存需求，见 V0.6 §14.7。
 type GPUResourceSpec struct {
@@ -44,26 +38,20 @@ type ResourceSpec struct {
 	NetworkMbps uint64
 }
 
-// FunctionInfo 将配置中的共享库、函数名称和资源需求随任务一并传给任务池，见 V0.6 §10.5.4。
+// FunctionInfo 保存 Router 资源准入使用的函数配置，见 V0.6 §10.5.4。
 type FunctionInfo struct {
 	SOName   string
 	FuncName string
 	Resource ResourceSpec
 }
 
-// TaskArgument 保存输入键及由 SDK 管理的借用地址，见 V0.6 §10.5.2、§11.5。
-type TaskArgument struct {
-	Bucket    string
-	SessionID string
-	Key       string
-	DataAddr  unsafe.Pointer
-}
-
-// TaskInvocation 描述一次独立的函数调用。V0.6 每个派生任务携带一项 Args，见 §8.2–8.4。
+// TaskInvocation is the five-field request accepted by the task pool.
 type TaskInvocation struct {
-	Function  FunctionInfo
-	InputMode InputMode
-	Args      []TaskArgument
+	AppName   string
+	FuncName  string
+	SOName    string
+	DataAddr  unsafe.Pointer
+	SessionID string
 }
 
 // StatusCode 表示 V0.6 附录 D §D.8 定义的接口错误类别。

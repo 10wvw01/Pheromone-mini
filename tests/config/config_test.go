@@ -32,7 +32,7 @@ func TestConfig(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, name := range []string{"producer", "processor"} {
-			if _, ok := app.Functions[contract.FunctionIdentity{SOName: "producer.so", FuncName: name}]; !ok {
+			if _, ok := app.Functions[contract.FunctionIdentity{AppName: app.Name, SOName: "producer.so", FuncName: name}]; !ok {
 				t.Fatalf("missing %s in producer.so", name)
 			}
 		}
@@ -70,11 +70,9 @@ func TestConfig(t *testing.T) {
 		{"TEST-APP-15/time_order", "\"max_wait_ms\": 1000", "\"max_wait_ms\": 9"},
 		{"TEST-APP-15/null", "\"enabled\": true", "\"enabled\": null"},
 		{"TEST-APP-15/missing_enabled", "\"enabled\": true,", ""},
-		{"TEST-DIR-09/null", "\"trigger_option\": 0", "\"trigger_option\": null"},
-		{"TEST-DIR-09/negative", "\"trigger_option\": 0", "\"trigger_option\": -1"},
-		{"TEST-DIR-09/fraction", "\"trigger_option\": 0", "\"trigger_option\": 1.0"},
-		{"TEST-DIR-09/overflow", "\"trigger_option\": 0", "\"trigger_option\": 3"},
 		{"TEST-DIR-09/duplicate_pair", "\"direct_processor\"\n      ]", "\"direct_processor\", \"direct_processor\"\n      ]"},
+		{"removed_buckets", `"app_name": "smc_demo"`, `"app_name": "smc_demo", "buckets": ["b_input"]`},
+		{"blank_trigger_bucket", `"bucket": "b_input"`, `"bucket": " "`},
 		{"TEST-EVT-07/dependency", "\"DIRECT\"", "\"K_OUT_OF_N\""},
 		{"TEST-EVT-07/trigger", "\"IMMEDIATE\"", "\"BY_SET\""},
 		{"TEST-EVT-07/batch", "\"IMMEDIATE\"", "\"BY_BATCH_SIZE\""},
@@ -105,28 +103,24 @@ func TestConfig(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := app.Functions[contract.FunctionIdentity{SOName: "producer.so", FuncName: "producer"}].Resource
+		got := app.Functions[contract.FunctionIdentity{AppName: app.Name, SOName: "producer.so", FuncName: "producer"}].Resource
 		if got.MemoryMB != math.MaxUint64/config.MiB || got.GPU.DeviceCount != math.MaxUint32 ||
 			app.Delay.MaxWait != time.Duration(9223372036854)*time.Millisecond {
 			t.Fatalf("boundaries lost precision: %+v, %+v", got, app.Delay)
 		}
 	})
-	t.Run("TEST-DIR-08/modes", func(t *testing.T) {
-		for _, option := range []string{"", ", \"trigger_option\": 0", ", \"trigger_option\": 1", ", \"trigger_option\": 2"} {
-			test := strings.Replace(raw, "],\n      \"trigger_option\": 0", "]"+option, 1)
-			app, err := config.Parse([]byte(test))
-			if err != nil {
-				t.Fatal(err)
+	t.Run("reject_removed_trigger_option", func(t *testing.T) {
+		for _, field := range []string{`"type": "DIRECT"`, `"primitive_type": "IMMEDIATE"`} {
+			changed := strings.Replace(raw, field, `"trigger_option": 0, `+field, 1)
+			if changed == raw {
+				t.Fatalf("fixture missing %s", field)
 			}
-			var want contract.InputMode
-			if option != "" {
-				want = contract.InputMode(option[len(option)-1] - '0')
-			}
-			if got := app.Direct[contract.FunctionIdentity{SOName: "direct_source.so", FuncName: "direct_source"}][0].Mode; got != want {
-				t.Fatalf("option %q mapped to %d, want %d", option, got, want)
+			if _, err := config.Parse([]byte(changed)); err == nil || !strings.Contains(err.Error(), "unknown field") {
+				t.Fatalf("expected rejection for %s, got %v", field, err)
 			}
 		}
 	})
+
 }
 
 func FuzzConfig(f *testing.F) {

@@ -1,7 +1,6 @@
 package example
 
-// DirectProcessor demonstrates a DIRECT target. The Task Builder uses
-// InputValue mode when trigger_option is omitted on its DIRECT dependency.
+// DirectProcessor demonstrates a DIRECT target receiving the committed batch.
 func DirectProcessor(input []byte) error {
 	_ = input
 	return nil

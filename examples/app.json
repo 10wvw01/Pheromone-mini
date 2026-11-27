@@ -79,12 +79,7 @@
       }
     }
   ],
-  "buckets": [
-    "b_input",
-    "b_shared",
-    "b_direct_output",
-    "b_result"
-  ],
+
   "dependencies": [
     {
       "type": "DIRECT",
@@ -93,8 +88,7 @@
       ],
       "tgt_functions": [
         "direct_processor"
-      ],
-      "trigger_option": 0
+      ]
     }
   ],
   "triggers": [
@@ -104,8 +98,7 @@
       "primitive_type": "IMMEDIATE",
       "primitive": {
         "function": "producer"
-      },
-      "trigger_option": 0
+      }
     },
     {
       "bucket": "b_shared",
@@ -113,8 +106,7 @@
       "primitive_type": "IMMEDIATE",
       "primitive": {
         "function": "processor"
-      },
-      "trigger_option": 0
+      }
     },
     {
       "bucket": "b_shared",
@@ -123,8 +115,7 @@
       "primitive": {
         "function": "processor",
         "key_name": "ready"
-      },
-      "trigger_option": 1
+      }
     }
   ]
 }

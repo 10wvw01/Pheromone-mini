@@ -44,7 +44,7 @@ V0.6 以 Pheromone 的两级调度、Data Bucket 和 Trigger 设计为基础，�
 | 配置入口 | TriggerInit(appJSONPath)；模块读取 app.json，解析内嵌 functions[] |
 | functions[] | app.json 内嵌 Function 配置；保存 so_name、func_name、description、version、resource |
 | 对上游 API | 只暴露 TriggerInit 和 EventTriggerNotify 两个 API |
-| Bucket | 在当前调度实例管理的 App 范围内全局唯一；事件不携带 app_name |
+| Bucket | 规则按 App 隔离，Bucket 名可跨 App 重复 |
 | Function 标识 | so_name 表示 SO 文件名；func_name 表示具体函数标识；两者独立 |
 | Function 唯一性 | (so_name, func_name) 在当前 App 内唯一；不同共享库可使用相同 func_name |
 | Function 资源 | 保留 CPU / Memory / GPU / Disk / Network Resource 字段；Task Router 必查 CPU / Memory，按需检查 GPU / Disk / Network；不定义未经确认的 Execution |
@@ -52,15 +52,14 @@ V0.6 以 Pheromone 的两级调度、Data Bucket 和 Trigger 设计为基础，�
 | Trigger | IMMEDIATE、BY_NAME |
 | 多 Trigger | 一个 Bucket 可关联多条 Trigger；逐条匹配，逐条生成任务 |
 | DIRECT 优先级 | 来源标识存在 DIRECT 目标时走 DIRECT；否则执行 Bucket Trigger 匹配 |
-| DataReadyEvent | 仅 bucket、key、session_id |
-| 通知参数 | sourceFuncName（FunctionIdentity）、data_addr 作为 EventTriggerNotify 独立参数 |
+| DataReadyEvent | AppName、Bucket、Key、SessionID、DataAddr |
+| 通知参数 | DataReadyEvent 包含 AppName、Bucket、Key、SessionID、DataAddr，来源 FunctionIdentity 单独传入 |
 | 数据传递 | 统一通过 data_addr 传递；不区分大小数据包 |
-| Task 输入 | 每次通知传一个对象，每个派生任务的 Args[] 含一项；Key 必填 |
-| 输入模式 | `app.json` 使用 `trigger_option`，Go 任务使用 `TaskInvocation.InputMode`。0 = Value（默认），1 = Key + Value，2 = Key Only |
+| Task 输入 | 一次通知对应一批已提交数据，所有命中任务借用批数据入口 |
 | 数据生命周期 | 上游持有数据；数据有效性、任务完成判定和回收均由 Data SDK 管控 |
 | DataRef | 完全删除；不实现 validate / retain / release |
 | Pool 接口 | 只有 TryEnqueue(TaskInvocation)，不传 ctx |
-| Function 信息 | FunctionInfo（so_name、func_name、resource）随 TaskInvocation 传递 |
+| Function 信息 | Router 使用 FunctionInfo 进行资源准入，Pool 仅收五字段 TaskInvocation |
 | Pool 静态注册 | 不提供，不调用 register_function_configs |
 | 资源准入 | Task Router 在 TryEnqueue 前检查目标 Function 所需的资源 |
 | 资源不足 | 不调用 TryEnqueue；与探测 / 计算失败一样，记录日志后按延时调度配置暂存重试或终止 |
@@ -75,7 +74,7 @@ V0.6 以 Pheromone 的两级调度、Data Bucket 和 Trigger 设计为基础，�
 2. **App Registry**：保存 App、Function、Bucket、DIRECT Dependency 和 Trigger 的内部记录及索引。
 3. **DIRECT Dependency**：根据事件的来源标识 查询当前 App 的 DIRECT 目标函数，独立生成任务。
 4. **Event Trigger**：根据 Bucket 索引匹配 Immediate / ByName Trigger。
-5. **Task Builder**：将命中结果和事件数据地址组装为 TaskInvocation.Args[]；复制异步任务需要持有的字符串元数据，不复制数据内容。
+5. **Task Builder** 将目标函数与批数据地址组装成 TaskInvocation，Key 用于触发匹配与日志。
 6. **Task Router**：检查 CPU / Memory 及任务声明的 GPU / Disk / Network，资源满足后调用 TryEnqueue；处理 Pool 容量不足和 Delay Queue。
 7. **Task Coroutine Pool（下游）**：只提供 TryEnqueue，管理任务队列、协程消费、SO / Function 加载和函数执行。
 
@@ -89,7 +88,7 @@ flowchart TD
     D --> E["JSON 校验 / Registry 与索引构建"]
     E --> F["初始化成功，开放事件通知"]
     F --> G["上游 Commit 成功"]
-    G --> H["EventTriggerNotify(event, sourceFuncName, data_addr)"]
+    G --> H["EventTriggerNotify(event, source, data_addr)"]
     H --> I["DIRECT Dependency 判断"]
     I -->|存在 DIRECT 目标| J["DIRECT：(so_name, func_name) -> 目标函数标识列表"]
     I -->|无 DIRECT 目标或来源为零值| K["Bucket Trigger：IMMEDIATE / BY_NAME"]
@@ -132,18 +131,15 @@ func TriggerInit(appJSONPath string) error
 
 ~~~go
 type FunctionIdentity struct {
-    SOName   string `json:"so_name"`
-    FuncName string `json:"func_name"`
+    AppName  string
+    SOName   string
+    FuncName string
 }
 
-func EventTriggerNotify(
-    event DataReadyEvent,
-    sourceFuncName FunctionIdentity,
-    dataAddr unsafe.Pointer,
-) error
+func EventTriggerNotify(event DataReadyEvent, source FunctionIdentity) error
 ~~~
 
-DataReadyEvent 仅包含 bucket、key、session_id。外部 SMC Actor 传 FunctionIdentity{}；Function 产生的数据由 Object SDK 从当前 TaskContext 的 SOName 和 FuncName 注入。
+DataReadyEvent 包含 AppName、Bucket、Key、SessionID、DataAddr。外部 SMC Actor 传 FunctionIdentity{}。函数产出时，由 SDK 从当前执行上下文取得 AppName、SOName 和 FuncName。
 
 两个上游 API 成功返回 `nil`，失败返回 `*APIError`，包含稳定的 `status_code` 和诊断文本 `msg`。调用方用 `errors.As` 获取错误并按状态码处理。具体状态码及语义见第三部分 §10.5.6、§10.6。
 
@@ -157,15 +153,15 @@ type TaskPool interface {
 }
 ~~~
 
-TryEnqueue 不带 ctx。Pool 实例自身持有队列和运行状态；本模块不提供 Pool 静态 Function 注册 API。完整 FunctionInfo（so_name、func_name、resource）随 TaskInvocation 传递。
+TryEnqueue 按值接收 TaskInvocation。Pool 自身管理执行队列，Router 按目标函数配置做准入。
 
-Pool 根据 so_name 和 func_name 识别执行目标；具体采用 Go Plugin、cgo/native SO 或其他加载方式，由下游 Pool 自行决定，不属于本模块的实现范围。本模块不调用 dlopen / dlsym。
+Pool 根据 app_name、so_name 和 func_name 识别执行目标；具体采用 Go Plugin、cgo/native SO 或其他加载方式，由下游 Pool 自行决定，不属于本模块的实现范围。本模块不调用 dlopen / dlsym。
 
 ## 关键数据与生命周期
 
-- TaskArgument 包含 bucket、session_id、key、data_addr；key 必须存在。
-- 当前一次 EventTriggerNotify 对应一个数据对象；每个命中目标构建独立 TaskInvocation，每个任务的 Args 长度为 1。
-- TaskInvocation 包含 FunctionInfo、InputMode 和 Args[]。
+- 每次通知要求非空的 Key 和批数据入口。
+- SDK 按 app_name + bucket + key 绑定一批数据，整批提交完成后通知一次，每条命中规则独立生成任务。
+- TaskInvocation 只包含 AppName、FuncName、SOName、DataAddr、SessionID。
 - Task Builder 复制 bucket、key、session_id、so_name、func_name 等异步任务需要持有的字符串；不复制数据内容。
 - data_addr 是借用地址，不发生所有权转移；调度模块和 Pool 均不得释放该地址。
 - Go 接口使用 unsafe.Pointer 表示外部共享内存地址。该地址应指向上游管理的 mmap / 共享内存区域，不应指向未固定的 Go Heap 对象。
@@ -177,7 +173,7 @@ Pool 根据 so_name 和 func_name 识别执行目标；具体采用 Go Plugin、
 
 ## 资源准入与 Delay Queue
 
-Task Router 从内部 Function Registry 获取目标 Function 的完整 ResourceSpec，并查询当前进程 / 容器 CPU、Memory 可用资源；GPU / Disk / Network 字段保留并随 FunctionInfo 透传给 Pool，Router 按工程实现设计 §14.7 检查任务实际声明的维度。
+Task Router 从内部 Function Registry 获取目标 Function 的完整 ResourceSpec，并查询当前进程 / 容器 CPU、Memory 可用资源；GPU / Disk / Network 也由 Router 按任务所声明的资源进行准入。参照工程实现设计 §14.7，Router 按工程实现设计 §14.7 检查任务实际声明的维度。
 
 资源查询优先识别当前进程的 cgroup 限额与使用量：通过 /proc/self/cgroup 定位 cgroup，再读取 cgroup v2 或 v1 对应的 CPU / Memory 限额和使用统计；/proc/meminfo 可作为宿主机参考或兜底。资源判断是准入快照，不构成资源预留。CPU / Memory 检查是必做项，每次提交（包括延时重试）前执行；具体采样及计算规则见第四部分 §14.2。
 
@@ -185,7 +181,7 @@ Task Router 从内部 Function Registry 获取目标 Function 的完整 Resource
 - 资源探测 / 解析 / 准入计算失败：不调用 TryEnqueue，打印原因日志并判断 scheduler.delay_queue.enabled；启用则进入 / 保留 Delay Queue，未启用则终止本次路由，日志原因 RESOURCE_PROBE_FAILED，并用 reason 区分探测、解析和计算失败；本期不做外部上报。
 - 资源满足：调用 TryEnqueue。
 - Pool 返回 NO_CAPACITY：这是队列容量不足，不等同于 CPU / Memory 资源不足；按 Delay Queue 配置暂存并重试。
-- Pool 返回 ACCEPTED：Pool 接收 TaskInvocation；Pool 复制任务描述符和 Args 切片，不复制、不释放 data_addr 指向的数据内容。
+- Pool 返回 ACCEPTED：Pool 接收 TaskInvocation；Pool 保存按值传入的执行请求，不复制、不释放 data_addr 指向的数据内容。
 - Pool 返回 ERROR：终止当前任务并记录内部错误。
 
 延时重试先判断首次资源不足、探测 / 计算失败或 Pool NoCapacity 建立的固定 deadline；到期优先终止，未到期则重新检查资源，不直接调用 TryEnqueue，不重置 deadline。
@@ -211,7 +207,6 @@ Task Router 从内部 Function Registry 获取目标 Function 的完整 Resource
 
 ## 第一部分：总体设计
 
-
 ## 第 1 章 功能需求列表概述
 
 ### 1.1 业务背景与本期链路
@@ -235,7 +230,7 @@ Task Router 从内部 Function Registry 获取目标 Function 的完整 Resource
 | App Registry | Function 的 so_name / func_name / resource 配置 | P0 | 本模块 |
 | DIRECT Dependency | 来源标识 (so_name, func_name) 到一个或多个 target func_name 的匹配 | P0 | 本模块 |
 | Event Trigger | Immediate / ByName 匹配、多 Trigger | P0 | 本模块 |
-| Task Builder | trigger_option 到 InputMode 映射、Args[] 构建 | P0 | 本模块 |
+| Task Builder | 构建五字段执行请求 | TaskAction + DataReadyEvent | TaskInvocation |
 | Task Router | CPU / Memory 预检查、原子 TryEnqueue、Delay Queue | P0 | 本模块 |
 | 协作接口 | TriggerInit、EventTriggerNotify、TryEnqueue | P0 | 本模块 + 上下游 |
 
@@ -248,13 +243,13 @@ Task Router 从内部 Function Registry 获取目标 Function 的完整 Resource
 - 数据地址的生成与传递。
 - 启动阶段调用 TriggerInit；Commit 成功后调用 EventTriggerNotify。
 - Session 生命周期、任务完成判定及数据回收均由 Data SDK 管控。
-- Function 输出对象时，从当前 TaskContext 注入 SOName 和 FuncName；外部 Actor 传 FunctionIdentity{}。
+- Function 输出对象时，从当前 TaskContext 注入 AppName、SOName 和 FuncName；外部 Actor 传 FunctionIdentity{}。
 
 **下游 Task Coroutine Pool 负责：**
 - 唯一提供 TryEnqueue(TaskInvocation)，不带 ctx。
-- 复制任务描述符和 Args 切片，不复制、不释放 DataAddr 指向的数据。
+- 保存执行请求，不复制、不释放 DataAddr 指向的数据。
 - 队列消费、协程创建 / 等待 / 唤醒。
-- 根据 SOName + FuncName 加载并执行 Function；具体 Loader 由 Pool 决定。
+- 根据 AppName + SOName + FuncName 加载并执行 Function；具体 Loader 由 Pool 决定。
 
 ### 1.4 冻结的基础约束
 
@@ -267,15 +262,15 @@ Task Router 从内部 Function Registry 获取目标 Function 的完整 Resource
 | Resource | 保留 CPU / Memory / GPU / Disk / Network 字段；Router 必查 CPU / Memory，按需检查 GPU / Disk / Network；不定义 Execution |
 | DIRECT | 独立依赖路径；(so_name, func_name) → 目标函数标识列表 |
 | Trigger | IMMEDIATE、BY_NAME |
-| DataReadyEvent | 仅 bucket、key、session_id |
-| 通知参数 | sourceFuncName（FunctionIdentity）、data_addr 独立传入 |
+| DataReadyEvent | AppName、Bucket、Key、SessionID、DataAddr |
+| 通知参数 | DataReadyEvent 包含 AppName、Bucket、Key、SessionID、DataAddr，来源 FunctionIdentity 单独传入 |
 | 数据 | 统一地址传递；不区分大小数据包 |
-| Task 参数 | key 必须；每个任务的 Args[] 长度为 1 |
+| Task 参数 | Pool 通过 DataAddr 获取整批数据，SessionID 对应本次事件 |
 | 数据生命周期 | Session 结束且相关任务全部完成或终止后，上游回收 |
 | DataRef | 不存在；不提供 validate / retain / release |
 | 上游 API | TriggerInit、EventTriggerNotify |
 | 下游接口 | TryEnqueue(TaskInvocation)，无 ctx |
-| Function 配置 | FunctionInfo 随 TaskInvocation 传递；无静态注册 API |
+| Function 配置 | 由 Registry 提供给 Router 做资源准入 |
 | 资源准入 | TryEnqueue 前检查 CPU / Memory |
 | 协程 | Pool 内部管理消费和唤醒；本模块不调用 wake_one |
 
@@ -299,11 +294,11 @@ Task Router 从内部 Function Registry 获取目标 Function 的完整 Resource
 | Registry | 模块内部唯一的运行时配置与索引 |
 | so_name | 动态库文件名，作为下游 Pool 识别执行载体的标识 |
 | func_name | 共享库内的函数名；与 so_name 组成函数标识 |
-| sourceFuncName | 本次数据的生产函数标识，包含 so_name 和 func_name，用于 DIRECT 匹配 |
+| source | 本次数据的生产函数标识，包含 so_name 和 func_name，用于 DIRECT 匹配 |
 | DIRECT Dependency | 来源 (so_name, func_name) 到目标函数标识 的独立依赖关系 |
-| Bucket | 全局唯一的数据逻辑命名空间 |
+| Bucket | App 范围内的数据逻辑命名空间 |
 | DataReadyEvent | 最小通知，包含 bucket、key、session_id |
-| TaskArgument | 一项函数输入，包含 bucket、session_id、key、data_addr |
+| 批数据入口 | SDK 提交的整批数据入口，由 DataAddr 指向 |
 | TaskInvocation | 提交给 Task Coroutine Pool 的一次函数调用描述 |
 
 ## 第 2 章 Pheromone 源码参考与裁剪
@@ -313,7 +308,7 @@ V0.6 复用 Pheromone 的 DIRECT 独立依赖、Bucket 到 Trigger 列表、Imme
 本项目裁剪为单节点、单进程：
 - 不实现 Coordinator、节点级调度、跨节点数据位置同步和远程传输。
 - 不复制 INLINE / SHARED_MEMORY 双载体与 DataRef 生命周期；统一传递 data_addr。
-- Function 配置通过 app.json 内嵌 functions[] 解析；资源信息随 TaskInvocation 传给 Pool。
+- Function 配置通过 app.json 内嵌 functions[] 解析；资源信息供 Router 准入使用。
 - Pool 只提供 TryEnqueue，不增加静态注册、unregister 或 ctx 接口。
 - 本模块用 Go 实现；下游 Function Loader 的具体技术不在本模块范围。
 
@@ -361,7 +356,7 @@ flowchart TB
 1. 启动时由上游调用 TriggerInit(appJSONPath)，模块读取 app.json，构建内部 Registry。
 2. Data SDK 完成 Object Commit 后调用 EventTriggerNotify。
 3. Event Trigger 根据 bucket 定位 App；DIRECT 优先匹配来源标识 (so_name, func_name)。
-4. Task Builder 以当前 data_addr 和 key 构建 Args[]。
+4. Task Builder 将目标 App、SO、函数名与事件的 DataAddr、SessionID 组装为 TaskInvocation。
 5. Task Router 使用 FunctionInfo.Resource 检查 CPU / Memory。
 6. 资源满足时调用 TryEnqueue；Pool 负责队列消费和协程调度。
 7. 资源不足、探测 / 计算失败不调用 Pool；与 Pool NoCapacity 一样，记录原因后按延时调度配置进入 Delay Queue 或终止本次路由。
@@ -370,8 +365,8 @@ flowchart TB
 
 - 配置解析只发生在 TriggerInit 阶段；运行期使用只读索引。
 - DIRECT 和 Bucket Trigger 是两条独立路径。
-- DataReadyEvent 保持最小；数据地址和来源函数标识作为独立参数。
-- FunctionInfo 随 TaskInvocation 传递，不设计第二套静态注册协议。
+- DataReadyEvent 携带完整批数据通知字段，来源函数标识单独传入。
+- FunctionInfo 由 Router 持有，首次尝试和每次重试均依据它检查资源。
 - Pool TryEnqueue 是唯一的下游交互，不传 ctx。
 - 数据地址只借用，不复制、不释放；由上游 Session 生命周期兜底。
 
@@ -380,7 +375,6 @@ flowchart TB
 <a id="part-2"></a>
 
 ## 第二部分：核心模块详细设计
-
 
 本部分描述 TriggerInit / JSON Parser、App Registry、DIRECT Dependency、Event Trigger、Task Builder 和 Task Router 的职责、数据结构、处理流程和验收规则。需求 ID 以第六部分为唯一来源；小节可同时覆盖多个明确列出的 ID。所有运行期模块使用同一个内部 Registry；不向上游暴露 Registry 生命周期接口。
 
@@ -394,7 +388,7 @@ flowchart TB
 | App Registry | 索引构建、全局唯一性和只读查询 | 候选 App 配置 | App / Function / Bucket / Dependency / Trigger 索引 |
 | DIRECT Dependency | 来源函数查询、目标函数展开、DIRECT 优先级 | (so_name, func_name) + 当前 App | 一个或多个 DIRECT TaskAction |
 | Event Trigger | Bucket 查询、Immediate、ByName、多规则匹配 | DataReadyEvent | 一个或多个 Trigger TaskAction |
-| Task Builder | 设置任务 InputMode、Args[] 构建、异步元数据复制 | TaskAction + 事件数据视图 | TaskInvocation |
+| Task Builder | 构建五字段执行请求 | TaskAction + DataReadyEvent | TaskInvocation |
 | Task Router | CPU / Memory 预检查、原子准入、Delay Queue、失败日志 | TaskInvocation | Pool 接收或 Router 持有的延时任务 |
 
 ### 4.2 模块依赖
@@ -417,11 +411,11 @@ App Registry 在启动阶段构建只读索引。运行期 DIRECT Dependency 和
 ### 4.3 统一运行时对象
 
 - DataReadyEvent：上游通知视图，仅包含 bucket、key、session_id。
-- EventDataView：EventTriggerNotify 的独立数据参数，包含 sourceFuncName（FunctionIdentity）、data_addr。
-- TaskAction：本模块内部对象，包含目标 FunctionInfo 和 InputMode；不传给下游。
+
+- TaskAction：内部目标函数配置，供 Task Builder 与 Router 使用。
 - FunctionInfo：so_name、func_name 和 ResourceSpec。
-- TaskArgument：一项函数输入，包含 bucket、session_id、key、data_addr。
-- TaskInvocation：交给 Pool 的一次函数调用描述，包含 FunctionInfo、InputMode 和 Args[]。
+
+- TaskInvocation：Pool 的执行请求，仅包含 AppName、FuncName、SOName、DataAddr、SessionID。
 - RouterPendingTask：Task Router 私有对象，包含 TaskInvocation 的自有元数据、首次延时时间和下次重试时间；data_addr 仍为借用地址，不拥有数据内存。
 
 ## 第 5 章 TriggerInit / App Registry / JSON Parser
@@ -439,7 +433,7 @@ func TriggerInit(appJSONPath string) error
 处理步骤：
 
 1. 检查 appJSONPath 非空并读取 app.json。
-2. 解析 App 顶层配置：app_name、version、scheduler、functions、buckets、dependencies、triggers。
+2. 解析 App 顶层配置：app_name、version、scheduler、functions、dependencies、triggers。
 3. 解析 functions[] 中每项内嵌的 Function 字段。
 4. 形成每个 Function 的完整 FunctionRecord。
 5. 校验字段类型、必填字段、唯一性及跨对象引用。
@@ -448,16 +442,9 @@ func TriggerInit(appJSONPath string) error
 
 每个 app.json 描述一个 App。单进程需要加载多个 App 时，可在运行事件开始前多次调用 TriggerInit；所有初始化调用完成后再开放业务事件。事件处理开始后不再接受新配置。
 
-### 5.2 功能点 APP-03：Bucket 全局唯一索引
+### 5.2 功能点 APP-03：App 内 Bucket 规则索引
 
-Bucket 在当前 Registry 管理的全部 App 之间全局唯一。
-
-~~~text
-bucket_index:
-    bucket_name -> AppRecord + TriggerList
-~~~
-
-收到事件后先根据 bucket 找到所属 App。DataReadyEvent 不携带 app_name。
+运行时先按事件的 `AppName` 查找已注册应用，再按 `Bucket` 查找该 App 的 Trigger 列表。每个 App 可以使用与其他 App 相同的 Bucket 名。规则索引直接从 `triggers[].bucket` 构建，`app.json` 无需维护独立 `buckets` 列表。纯 DIRECT 产出只需在事件中提供非空 Bucket；没有 DIRECT 或 Bucket Trigger 命中的有效通知正常返回，生成零个任务。
 
 ### 5.3 功能点 APP-04 / APP-05：Function 双标识与 Resource
 
@@ -495,9 +482,9 @@ app.json 的 functions[] 每项描述一个 Function，核心结构：
 1. so_name 和 func_name 是不同概念，不能合并成 handler。
 2. 一个 SO 可以对应多个 func_name。
 3. (so_name, func_name) 在当前 App 内唯一，不同共享库可以使用同名函数。
-4. DIRECT 和 Trigger 的函数引用可使用包含 so_name 和 func_name 的对象。函数名在当前 App 内只匹配一个函数时，也可使用字符串简写。
-5. 完整 resource 绑定到当前 Function 记录，即绑定到 so_name + func_name 这一对标识；Task Router 必查 CPUCores 和 MemoryMB，其余声明的资源按工程实现设计 §14.7 检查，完整配置透传给 Pool。
-6. 同一 so_name + func_name 被多个 App 复用时，其 resource 必须一致。
+4. DIRECT 和 Trigger 的函数引用可使用包含 so_name 和 func_name 的对象。函数名在当前 App 内只匹配一个函数时，也可使用字符串简写。配置解析用顶层 app_name 补齐函数标识。
+5. 静态资源配置绑定到 App 内的目标函数记录，Router 据此检查资源。
+6. 不同 App 可以对相同 SO 和函数组合配置各自的资源需求。
 7. so_name 必须是安全文件名，不允许路径穿越。
 8. func_name 必须非空。
 
@@ -507,7 +494,7 @@ app.json 的 functions[] 每项描述一个 Function，核心结构：
 - 同一 App 内 (so_name, func_name) 不得重复。
 - DIRECT 的 src_functions / tgt_functions 必须引用当前 App 已注册的函数。
 - Trigger 的目标 function 必须引用当前 App 已注册的函数。
-- Bucket 必须在当前 App 的 buckets 中声明。
+- Trigger 的 bucket 必须是非空名称，直接用于建立当前 App 的规则索引。
 - resource.cpu_cores、resource.memory_mb 必须是有效正数；gpu.device_count、gpu.memory_mb、disk_mb、network_mbps 必须是非负数。
 - 整数字段无损解析并校验 Go 类型范围；内存及时间换算上限见附录 B §B.5。多 App 延时配置不一致时拒绝当前 App，不能覆盖已有全局配置。
 - 本模块不加载 SO、不执行 dlsym；不在初始化阶段要求下游 Pool 注册 Function。
@@ -521,8 +508,8 @@ function_index[app_name][(so_name, func_name)] -> FunctionInfo {
     resource
 }
 
-direct_index[app_name][(so_name, func_name)] -> [{目标函数标识, InputMode}]
-bucket_index[bucket_name] -> AppRecord + TriggerList
+direct_index[app_name][(so_name, func_name)] -> [{目标函数标识}]
+bucket_index[app_name][bucket_name] -> TriggerList
 ~~~
 
 初始化构建过程在临时对象中完成。只有当前 app.json 的全部配置解析、校验、索引构建均成功后，才将 AppRecord 原子发布到内部 Registry。配置失败不影响已经成功加载的其他 App。
@@ -536,7 +523,7 @@ functions[] 直接包含 Function 配置，不接受外部配置路径；字段�
 - 用户先按附录 B 自行编写 app.json，再串行调用 TriggerInit；所有预期 App 的初始化均成功返回后，才允许发送 EventTriggerNotify。初始化与通知不得并发。
 - 内部状态为 Uninitialized、Initializing、Ready、Running。首次初始化失败回到 Uninitialized；追加 App 初始化失败保留已有索引并回到 Ready，调用方须修复失败配置后再开放事件。
 - 未初始化或仍在初始化时收到通知，返回 ErrNotInitialized，不匹配、不构建、不提交任务。
-- Ready 中首个通过参数和 Bucket / 来源函数校验的通知将状态切换为 Running；非法通知不触发切换。Running 只读，不接受后续 TriggerInit；该调用返回带原因的初始化错误。
+- Ready 中首个通过参数和 App / 来源函数校验的通知将状态切换为 Running；非法通知不触发切换。Running 只读，不接受后续 TriggerInit；该调用返回带原因的初始化错误。
 - 调用方负责确认全部 App 已初始化，无需新增 seal API。
 
 ## 第 6 章 DIRECT Dependency
@@ -554,28 +541,28 @@ DIRECT 不作为 Trigger Primitive，而是独立依赖路径。
 ~~~
 
 ~~~text
-direct_index[app_name][(so_name, func_name)] -> [{目标函数标识, InputMode}]
+direct_index[app_name][(so_name, func_name)] -> [{目标函数标识}]
 ~~~
 
-Bucket 全局索引先确定所属 App。初始化时，模块从当前 App 的 functions[] 解析 src_functions 引用的共享库和函数名，以 (so_name, func_name) 建立 DIRECT 索引。
+事件的 AppName 决定查询哪个 App。配置解析将顶层 app_name 与 src_functions 引用的共享库和函数名组合为 DIRECT 来源标识。
 
 ### 6.2 功能点 DIR-02 / DIR-03 / DIR-04：DIRECT 优先级和目标展开
 
 1. 来源为 FunctionIdentity{}：跳过 DIRECT，进入 Bucket Trigger。
-2. 来源为非零值：校验两个字段都有效，且精确标识当前 App 中的同一个 Function，否则返回 ErrInvalidArgument。
+2. 来源为非零值：校验来源三元组精确匹配当前 App 中已注册的函数，否则返回 ErrInvalidArgument。
 3. 存在 DIRECT 目标函数标识列表：为每个目标函数生成一个 DIRECT TaskAction，本次事件不再执行 Bucket Trigger。
 4. 没有 DIRECT 目标：进入 Bucket Trigger 匹配。
 5. 一个来源对应多个目标时，每个目标生成独立 TaskInvocation。
 
-### 6.3 功能点 DIR-05：DIRECT 输入规则
+### 6.3 功能点 DIR-05：DIRECT 批数据传递
 
-每条 DIRECT 依赖可选 `trigger_option`，整数 `0`（默认，Value）、`1`（Key + Value）、`2`（Key Only）。同一条依赖的所有目标使用同一模式，需要不同模式时拆成多条依赖。同一 App 内重复的 DIRECT 来源／目标对在初始化时拒绝。 参数始终保留原始 Bucket、SessionID、Key 和 DataAddr，Pool 依据 InputMode 生成执行输入视图。此配置不改变来源匹配条件或 DIRECT 优先级。Task Builder 使用当前事件的 bucket、session_id、key 和通知的 data_addr 构建一个 TaskArgument，每个任务的 Args 长度为 1。
+同一来源的所有 DIRECT 目标共享事件中的批数据入口，每个目标生成一项独立的 TaskInvocation。初始化拒绝同一 App 内重复的 DIRECT 来源／目标对。
 
 ## 第 7 章 Event Trigger
 
-### 7.1 功能点 EVT-01 / EVT-02：全局 Bucket 定位
+### 7.1 功能点 EVT-01 / EVT-02：定位 App 与 Bucket
 
-Event Trigger 根据 DataReadyEvent.Bucket 查询 bucket_index，取得所属 App 和该 Bucket 的有序 Trigger[]。
+根据 `DataReadyEvent.AppName` 定位 App，再查询该 App 内 `DataReadyEvent.Bucket` 的规则。
 
 ### 7.2 功能点 EVT-03：Immediate 匹配
 
@@ -586,6 +573,8 @@ Immediate 表示该 Bucket 收到有效数据就绪事件时命中；每条匹�
 ByName 表示 Bucket 和事件 Key 同时匹配时命中：
 
 ~~~text
+event.AppName == app.Name
+AND
 event.Bucket == trigger.Bucket
 AND
 event.Key == trigger.KeyName
@@ -604,83 +593,35 @@ event.Key == trigger.KeyName
 
 ## 第 8 章 Task Builder
 
-### 8.1 功能点 TSK-01：输入模式转换
+### 8.1 功能点 TSK-01：批数据入口
 
-| trigger_option | InputMode | Function 输入语义 |
-|---:|---|---|
-| 0 | InputValue | Value |
-| 1 | InputKeyValue | Key + Value |
-| 2 | InputKeyOnly | Key Only |
+SDK 在 `app_name + bucket + key` 绑定的一批数据全部可读后，提交一次 EventTriggerNotify。事件的 `DataAddr` 指向该次提交的批数据入口。调度器只透传指针。
 
-DIRECT 按依赖项的 trigger_option 映射输入模式，缺省为 InputValue。TaskArgument 内部始终包含必填 Bucket、SessionID、Key 和 DataAddr。
+### 8.2 功能点 TSK-02：匹配和执行字段
 
-### 8.2 功能点 TSK-02：构建 Args[]
-
-~~~go
-type TaskArgument struct {
-    Bucket    string
-    SessionID string
-    Key       string
-    DataAddr  unsafe.Pointer
-}
-~~~
-
-当前一次 EventTriggerNotify 对应一个数据对象：
-
-~~~text
-len(Args) = 1
-Args[0].Bucket = event.Bucket
-Args[0].SessionID = event.SessionID
-Args[0].Key = event.Key
-Args[0].DataAddr = dataAddr
-~~~
-
-一个事件命中多个目标函数时，每个目标分别获得自己的 TaskInvocation 和参数描述符，但 DataAddr 指向同一份上游数据。
+`Key` 用于 BY_NAME 匹配及诊断日志。`DataAddr` 和 `SessionID` 来自事件，`AppName`、`SOName` 和 `FuncName` 来自已注册的目标函数及其 App。
 
 ### 8.3 功能点 TSK-03 / TSK-04：TaskInvocation 组装
 
 ~~~go
-type GPUResourceSpec struct {
-    Required    bool
-    DeviceCount uint32
-    MemoryMB    uint64
-}
-
-type ResourceSpec struct {
-    CPUCores    float64
-    MemoryMB    uint64
-    GPU         GPUResourceSpec
-    DiskMB      uint64
-    NetworkMbps uint64
-}
-
-type FunctionInfo struct {
-    SOName   string
-    FuncName string
-    Resource ResourceSpec
-}
-
 type TaskInvocation struct {
-    Function  FunctionInfo
-    InputMode InputMode
-    Args      []TaskArgument
+    AppName   string
+    FuncName  string
+    SOName    string
+    DataAddr  unsafe.Pointer
+    SessionID string
 }
 ~~~
 
-Task Builder 必须复制异步任务需要持有的字符串，不能保留 notify 调用方的临时字符串引用。DataAddr 是借用地址，不复制、不释放。
+### 8.4 功能点 TSK-05：每个命中项独立构建
 
-### 8.4 功能点 TSK-05：每个命中目标独立构建
-
-- 一个 DIRECT source 对应多个 target：每个 target 一个 TaskInvocation。
-- 一个 Bucket 多条 Trigger 命中：每条 Trigger 一个 TaskInvocation。
-- 每个 TaskInvocation 拥有自己的描述符和字符串元数据。
-- 多个 TaskInvocation 可以共享同一 DataAddr。
+DIRECT 多目标和 Bucket 多规则各自生成独立的入队请求。多个请求可以共享同一批数据地址。
 
 ## 第 9 章 Task Router
 
 ### 9.1 功能点 RTE-01：Function 资源需求读取
 
-Task Router 使用 TaskInvocation.Function.Resource 获取该目标 Function 的静态资源需求。FunctionInfo 来自内部 Registry，不允许由上游事件伪造。
+Task Router 使用 Router 内部 FunctionInfo.Resource 获取该目标 Function 的静态资源需求。FunctionInfo 来自内部 Registry，不允许由上游事件伪造。
 
 ### 9.2 功能点 RTE-02：CPU / Memory 可用资源预检查
 
@@ -725,7 +666,6 @@ Task Router 只提交 Task，不调用单独的协程唤醒接口。Task Corouti
 
 ## 第三部分：接口与协作设计
 
-
 > 本文定义 V0.6 Go API、数据类型和上下游协作契约。上游只调用 TriggerInit 和 EventTriggerNotify；下游只提供 TryEnqueue(TaskInvocation)。
 
 ## 第 10 章 接口范围与公共类型
@@ -744,10 +684,10 @@ Task Router 只提交 Task，不调用单独的协程唤醒接口。Task Corouti
 ~~~mermaid
 flowchart LR
     APP["上游应用启动流程"] -->|"TriggerInit(appJSONPath)"| PM["Pheromone-mini（Go）"]
-    SDK["上游 Data Bucket SDK"] -->|"EventTriggerNotify(event, sourceFuncName, dataAddr)"| PM
+    SDK["上游 Data Bucket SDK"] -->|"EventTriggerNotify(event, source)"| PM
     PM -->|"TryEnqueue(TaskInvocation)"| POOL["Task Coroutine Pool"]
-    POOL -->|"按 SOName + FuncName 加载并执行"| FN["Function"]
-    FN -->|"Object API Commit；SDK 注入 sourceFuncName"| SDK
+    POOL -->|"按 AppName + SOName + FuncName 加载并执行"| FN["Function"]
+    FN -->|"Object API Commit；SDK 注入 source"| SDK
 ~~~
 
 ### 10.3 接口分组与边界
@@ -756,7 +696,7 @@ flowchart LR
 - B 组：下游 Task Coroutine Pool 唯一接口：TryEnqueue(TaskInvocation)。
 - 不存在 Pool 静态 Function 注册接口，不存在 register_function_configs。
 - 不存在 DataRef Adapter、validate、retain、release 等 Data SDK 回调。
-- FunctionInfo（so_name、func_name、resource）随 TaskInvocation 传递。
+- 资源配置存于 Router，Pool 只接收五字段任务。
 - Pool TryEnqueue 不带 ctx；Pool 实例自身持有队列和运行状态。
 
 ### 10.4 API 清单
@@ -782,48 +722,31 @@ TryEnqueue 是下游唯一交互接口。不提供 register_function、unregiste
 
 #### 10.5.1 DataReadyEvent
 
+所有五个字段均须有效，DataAddr 必须是非空的批数据入口。
+
 ~~~go
 type DataReadyEvent struct {
+    AppName   string
     Bucket    string
     Key       string
     SessionID string
-}
-~~~
-
-DataReadyEvent 仅包含 Bucket、Key、SessionID，不包含 sourceFuncName、dataAddr、payload_type、DataRef、app_name、event_id、trigger_name 或目标函数。
-
-#### 10.5.2 TaskArgument
-
-~~~go
-type TaskArgument struct {
-    Bucket    string
-    SessionID string
-    Key       string
     DataAddr  unsafe.Pointer
 }
 ~~~
 
-Bucket、SessionID 和 Key 必须存在；DataAddr 必须非空。一次通知对应一个对象，每个派生任务的 Args 长度为 1。
-
-#### 10.5.3 InputMode
+#### 10.5.2 FunctionIdentity
 
 ~~~go
-type InputMode uint8
-
-const (
-    InputValue InputMode = iota
-    InputKeyValue
-    InputKeyOnly
-)
+type FunctionIdentity struct {
+    AppName  string
+    SOName   string
+    FuncName string
+}
 ~~~
 
-| 值 | 来源 | Function 输入语义 |
-|---:|---|---|
-| InputValue | `trigger_option = 0` 或省略（同样适用于 DIRECT 和 Bucket Trigger） | Value |
-| InputKeyValue | trigger_option=1 | Key + Value |
-| InputKeyOnly | trigger_option=2 | Key Only |
+#### 10.5.3 数据批次标识
 
-`trigger_option` 是 `app.json` 中 DIRECT 依赖项和 Bucket Trigger 的可选整数配置，省略时按 `0` 处理。解析配置时，`0`、`1`、`2` 分别映射为 Go 类型 `InputMode` 的 `InputValue`、`InputKeyValue`、`InputKeyOnly`，运行时写入 `TaskInvocation.InputMode`。
+AppName、Bucket、Key 共同标识 SDK 中的数据，SessionID 表示所属会话，DataAddr 指向此次提交的整批数据。
 
 #### 10.5.4 ResourceSpec 与 FunctionInfo
 
@@ -849,19 +772,21 @@ type FunctionInfo struct {
 }
 ~~~
 
-SOName 与 FuncName 作用不同。Resource 保存 Function 的 CPU、Memory、GPU、Disk、Network 静态需求，并随 TaskInvocation 一起传给 Pool；Task Router 本期必须根据 CPUCores 和 MemoryMB 做准入检查。当前不定义 Execution 字段。
+Resource 保存静态资源需求。Router 必查 CPU 和内存，并按任务声明检查 GPU、磁盘和网络。
 
 #### 10.5.5 TaskInvocation
 
 ~~~go
 type TaskInvocation struct {
-    Function  FunctionInfo
-    InputMode InputMode
-    Args      []TaskArgument
+    AppName   string
+    FuncName  string
+    SOName    string
+    DataAddr  unsafe.Pointer
+    SessionID string
 }
 ~~~
 
-Bucket、SessionID、Key 和 DataAddr 一起保存在 Args 的输入对象描述中。TaskInvocation 不包含 AppName、sourceFuncName、TriggerName、DataRef 或固定 handler 字段。
+Bucket 与 Key 用于触发器匹配和日志。Pool 按 AppName、SOName、FuncName 识别目标，通过 DataAddr 接收批数据入口。
 
 #### 10.5.6 上游 API 统一错误格式
 
@@ -953,38 +878,19 @@ func TriggerInit(appJSONPath string) error
 #### 10.6.2 PM-API-002：EventTriggerNotify
 
 ~~~go
-type FunctionIdentity struct {
-    SOName   string `json:"so_name"`
-    FuncName string `json:"func_name"`
-}
-
-func EventTriggerNotify(
-    event DataReadyEvent,
-    sourceFuncName FunctionIdentity,
-    dataAddr unsafe.Pointer,
-) error
+func EventTriggerNotify(event DataReadyEvent, source FunctionIdentity) error
 ~~~
 
-入参：
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| event | DataReadyEvent | SDK 整批提交成功后发送，五个字段必填 |
+| source | FunctionIdentity | 产出函数的 AppName、SOName、FuncName。外部 Actor 传零值 |
 
-| 参数 | 类型 | 必须 | 说明 |
-|---|---|---:|---|
-| event | DataReadyEvent | 是 | 仅 Bucket、Key、SessionID |
-| sourceFuncName | FunctionIdentity | 是，可为零值 | 当前生产函数的 SOName 和 FuncName，由协程池绑定并由 SDK 透传，见 §10.8.2。外部 SMC Actor 传 FunctionIdentity{} |
-| dataAddr | unsafe.Pointer | 是，非空 | 已 Commit 对象的非空地址，空载荷对象也须提供有效地址 |
-
-处理顺序：
-
-1. 检查初始化状态。未完成初始化时返回 ErrNotInitialized。随后校验 Bucket、Key、SessionID 和 dataAddr，地址必须非空。
-2. 根据 Bucket 查询全局 Bucket Index，定位所属 App。
-3. sourceFuncName 为非零值时，校验 SOName 和 FuncName 均有效且精确匹配该 App 中的同一函数，否则返回 ErrInvalidArgument。
-4. 查询 DIRECT Dependency Index。
-5. 存在 DIRECT 目标时，为每个目标构建独立任务。按该依赖的 trigger_option 选择 Value（0，缺省）、Key + Value（1）或 Key Only（2），跳过本次事件的 Bucket Trigger。
-6. 无 DIRECT 目标时，按 Bucket 匹配 `IMMEDIATE` 或 `BY_NAME` 规则。
-7. 每条命中规则独立构建 TaskInvocation；每个任务的 Args 长度为 1。
-8. Task Router 必查 CPU / Memory，并按声明检查 GPU / Disk / Network。
-9. 资源不足、探测或准入计算失败时不调用 TryEnqueue；分别记录 RESOURCE_INSUFFICIENT 或 RESOURCE_PROBE_FAILED 日志（reason 区分探测 / 计算），判断延时调度是否启用：启用则暂存重试，未启用则终止本次路由。
-10. 资源满足时调用 TryEnqueue；NoCapacity 按 Delay Queue 规则处理。
+1. 检查初始化状态。随后检查 AppName、Bucket、Key、SessionID 和 DataAddr。
+2. 按事件 AppName 查找已注册 App。来源非零时，三元组必须精确匹配该 App 已注册的函数。
+3. 来源命中 DIRECT 时，为每个目标生成任务，跳过 Bucket 规则。
+4. 否则在当前 App 查找 Bucket 对应的规则。IMMEDIATE 匹配 Bucket，BY_NAME 再精确匹配 Key。每条命中规则各生成一个任务。
+5. Router 先做资源准入，再提交五字段请求。资源不足、探测或计算失败、Pool 暂时无容量时，按 Delay Queue 配置处理。
 
 延时调度为模块内部异步处理；资源失败和 Pool NoCapacity 共用现有配置，不新增 API。任务首次因任一可延时原因等待时建立 deadline，后续重试和原因切换不重置；到期优先终止。
 
@@ -994,7 +900,7 @@ func EventTriggerNotify(
 |---|---|
 | `nil` | 通知已按规则处理。无命中、直接入队、进入延时队列或按路由策略终止个别任务，都不构成通知 API 错误；不代表所有目标已入队或执行完成 |
 | `ErrNotInitialized` (1001) | 模块尚未完成初始化或正在初始化；不匹配、不路由 |
-| `ErrInvalidArgument` (1002) | Bucket、Key 或 SessionID 为空，Bucket 未注册，来源标识不完整或与该 App 的函数定义不匹配，或数据地址为空；不匹配、不路由 |
+| `ErrInvalidArgument` (1002) | AppName、Bucket、Key 或 SessionID 为空，AppName 未注册，来源标识不完整或与该 App 的函数定义不匹配，或批数据地址为空 |
 | `ErrInternal` (1500) | 处理通知时遇到不可恢复的模块内部错误，例如 Registry 内部不变量被破坏；不保证已经提交的任务会回滚，调用方不能据此直接重发通知 |
 
 资源不足、探测或计算失败、Pool 拒绝、延时队列已满或到期均按任务路由规则处理。尤其是 Pool 返回 `EnqueueError` 时终止该任务并记日志，不直接映射为通知 API 的 `ErrInternal`。
@@ -1024,9 +930,9 @@ Pool 实例创建、装配和生命周期由下游 / 集成方负责，不属于
 #### 10.7.2 TryEnqueue 调用语义
 
 1. TryEnqueue 必须原子完成容量判断和入队。
-2. Accepted 表示 Pool 已复制 TaskInvocation 的 Args 切片及其后续执行需要独立持有的描述符；Go string 可安全共享其不可变内容。
+2. Accepted 表示 Pool 已接收按值传递的 TaskInvocation。
 3. Pool 不复制、不释放 DataAddr 指向的业务数据。
-4. NoCapacity 表示未接管任务；Pool 不得在返回后继续引用调用方可变 Args 切片。
+4. NoCapacity 表示队列暂时无容量且未接收任务。
 5. Error 表示未接管任务。
 6. Pool 成功接收后，必须保证任务最终能被内部消费者发现。
 7. Pool 不要求本模块额外调用 wake_one。
@@ -1035,7 +941,7 @@ Pool 实例创建、装配和生命周期由下游 / 集成方负责，不属于
 #### 10.7.3 Pool 消费与唤醒责任
 
 - Pool 负责队列消费者、协程创建、等待、唤醒和任务完成。
-- Pool 根据 TaskInvocation.Function.SOName 和 FuncName 识别执行目标。
+- Pool 根据 AppName、SOName、FuncName 识别执行目标。
 - Pool 按自己的实现选择 Function 加载和符号定位机制；本模块不规定 Go Plugin、cgo 或 native SO Loader。
 - Pool 不负责释放 DataAddr 指向的上游数据内存。
 
@@ -1043,71 +949,53 @@ Pool 实例创建、装配和生命周期由下游 / 集成方负责，不属于
 
 #### 10.8.1 逻辑 TaskContext
 
-~~~go
-type TaskContext struct {
-    SOName    string
-    FuncName  string
-    InputMode InputMode
-    Args      []TaskArgument
-}
-~~~
-
-TaskContext 是 Pool 与 Function / Object SDK 的逻辑执行上下文，不是本模块第三个上游 API。具体函数加载和调用 ABI 由下游 Pool 决定。
+Pool 在执行目标函数前，将任务的 AppName、SOName、FuncName 和 SessionID 绑定到本次调用的上下文。具体加载和调用 ABI 由 Pool 决定。
 
 #### 10.8.2 Object API 与来源函数注入
 
-`sourceFuncName` 表示产出这份数据的已注册函数，来自本次执行任务的 `TaskInvocation.Function` 的 SOName 和 FuncName。协程池在调用函数前，将这两个字段绑定到本次调用的 TaskContext。函数通过 Object API 写出中间结果，Object SDK 在数据 Commit 成功后从当前调用上下文取值并透传给 `EventTriggerNotify`。SDK 无需解析 app.json 或生成函数名称，业务函数也无需自行填写来源。并发执行时，每次调用使用自己的上下文。
-
-外部 SMC Actor 写入首份数据时没有池内任务上下文，SDK 传 FunctionIdentity{}。调度器根据 Bucket 找到所属 App。来源为零值时直接评估 Bucket Trigger。来源为非零值时先验证它属于该 App，再查该函数的 DIRECT 依赖。命中时为配置中的所有目标分别构建任务并跳过本次 Bucket 规则，未命中时继续评估 Bucket Trigger。
-
-例如，Actor 写入 `raw` Bucket，SDK 传空来源，由 Immediate 规则拉起 `decode`。`decode` 写出中间结果时，SDK 透传协程池绑定的共享库和函数名；若 App 配置了 `decode → infer` 的 DIRECT 依赖，调度器便将该数据地址交给 `infer` 对应的任务。
+函数输出整批数据时，SDK 从本次调用上下文得到来源 FunctionIdentity。外部 Actor 的来源标识为零值，AppName 由业务写入上下文提供。两条路径均由 SDK 在批数据提交成功后通知调度器。
 
 ## 第 11 章 上下游协作流程与生命周期
 
 ### 11.1 启动期
 
 ~~~go
-if err := TriggerInit("./config/app.json"); err != nil {
-    return err
+for _, path := range []string{"./config/app-a.json", "./config/app-b.json"} {
+    if err := TriggerInit(path); err != nil {
+        return err
+    }
 }
 ~~~
 
-用户先按附录 B 编写 app.json；模块读取该文件并解析内嵌 functions[]。上游等待全部 TriggerInit 成功返回后才可发送事件，不调用 Registry 注册接口。
+一份文件注册一个 App。所有预期配置成功后再开放 SDK 通知。若某份失败，已注册 App 保留，可修复失败文件后继续初始化。
 
-### 11.2 运行期：上游通知一次 Commit
+### 11.2 运行期：上游通知一次批数据 Commit
 
 ~~~go
 event := DataReadyEvent{
+    AppName:   "image_app",
     Bucket:    "b_input",
     Key:       "image_001",
     SessionID: "session_1001",
+    DataAddr:  committedBatchAddr,
 }
-
-err := EventTriggerNotify(
-    event,
-    FunctionIdentity{},
-    committedObjectAddr,
-)
+err := EventTriggerNotify(event, FunctionIdentity{})
 ~~~
 
-Function 输出对象时，第二个参数传入由当前 TaskContext 的 SOName 和 FuncName 组成的标识；外部 Actor 传 FunctionIdentity{}。
+此例为外部 Actor 产出。函数产出时，SDK 透传 Pool 绑定的来源三元组。
 
 ### 11.3 运行期：Pool 接收任务
 
 ~~~text
 TaskInvocation
-    Function.SOName = image_process.so
-    Function.FuncName = crop_image
-    Function.Resource = {CPUCores: 2, MemoryMB: 512}
-    InputMode = InputValue
-    Args[0]:
-        Bucket = b_input
-        SessionID = session_1001
-        Key = image_001
-        DataAddr = committedObjectAddr
+    AppName = image_app
+    FuncName = crop_image
+    SOName = image_process.so
+    DataAddr = committedBatchAddr
+    SessionID = session_1001
 ~~~
 
-Task Router 先检查资源，再调用 TryEnqueue。Pool 自行根据 SOName + FuncName 加载并执行目标函数。
+首次入队与每次重试沿用本次提交的 DataAddr 和 SessionID。
 
 ### 11.4 端到端时序
 
@@ -1124,10 +1012,10 @@ sequenceDiagram
     App->>ET: TriggerInit(appJSONPath)
     ET->>ET: 读取 app.json，构建 Registry
     ET-->>App: 初始化成功后才允许发送事件
-    SDK->>ET: EventTriggerNotify(event, sourceFuncName, dataAddr)
+    SDK->>ET: EventTriggerNotify(event, source)
     ET->>ET: Bucket 定位 / DIRECT 判断 / Trigger 匹配
     ET->>TB: TaskAction + EventDataView
-    TB->>TB: 构建 TaskInvocation.Args[]
+    TB->>TB: 构建五字段 TaskInvocation
     TB->>RT: TaskInvocation
     RT->>RT: 查询当前可用 CPU / Memory
     alt 资源不足、探测或计算失败
@@ -1141,7 +1029,7 @@ sequenceDiagram
         RT->>Pool: TryEnqueue(TaskInvocation)
         alt Accepted
             Pool->>Pool: 入队并由内部协程消费
-            Pool->>Fn: 根据 SOName + FuncName 加载并执行
+            Pool->>Fn: 根据 AppName + SOName + FuncName 加载并执行
         else NoCapacity
             RT->>RT: Delay Queue 或终止
         else Error
@@ -1155,9 +1043,9 @@ sequenceDiagram
 | 对象 | 创建方 | 使用方 | 释放方 / 有效期 |
 |---|---|---|---|
 | DataReadyEvent | 上游 SDK | EventTriggerNotify | 上游保证 notify 调用期间有效 |
-| sourceFuncName | 上游 SDK / TaskContext | DIRECT 匹配 | 上游保证 notify 调用期间有效 |
+| source | 上游 SDK / TaskContext | DIRECT 匹配 | 上游保证 notify 调用期间有效 |
 | Bucket / Key / SessionID 字符串 | 上游 SDK | Task Builder / Pool / Function | Task Builder 复制异步任务所需字符串 |
-| TaskInvocation / Args 描述符 | Task Builder | Router / Pool | Router 或 Pool 管理自己的描述符副本 |
+| TaskInvocation 描述符 | Task Builder | Router / Pool | Router 或 Pool 管理自己的描述符副本 |
 | DataAddr 指向的数据 | 上游 Data SDK | Task Builder / Pool / Function | Data SDK 自行判定完成并回收；本模块不提供完成判定契约 |
 
 不可违反的规则：
@@ -1170,7 +1058,6 @@ sequenceDiagram
 6. Session 完成判定及数据回收由 Data SDK 管控，本模块不定义完成通知、引用计数或回收协议。
 7. DataAddr 应指向上游管理的共享内存 / mmap 区域，不应指向未固定的 Go Heap 对象。
 
-
 ### 11.6 并发、重入与调用顺序
 
 初始化与通知顺序（强制约束）：
@@ -1178,7 +1065,7 @@ sequenceDiagram
 - 用户先按附录 B 自行编写 app.json，再串行调用 TriggerInit；所有预期 App 的初始化均成功返回后，才允许发送 EventTriggerNotify。初始化与通知不得并发。
 - 内部状态为 Uninitialized、Initializing、Ready、Running。首次初始化失败回到 Uninitialized；追加 App 初始化失败保留已有索引并回到 Ready，调用方须修复失败配置后再开放事件。
 - 未初始化或仍在初始化时收到通知，返回 ErrNotInitialized，不匹配、不构建、不提交任务。
-- Ready 中首个通过参数和 Bucket / 来源函数校验的通知将状态切换为 Running；非法通知不触发切换。Running 只读，不接受后续 TriggerInit；该调用返回带原因的初始化错误。
+- Ready 中首个通过参数和 App / 来源函数校验的通知将状态切换为 Running；非法通知不触发切换。Running 只读，不接受后续 TriggerInit；该调用返回带原因的初始化错误。
 - 调用方负责确认全部 App 已初始化，无需新增 seal API。
 
 - TriggerInit 仅在启动阶段调用；所有配置初始化完成后再开始业务事件。
@@ -1197,14 +1084,14 @@ sequenceDiagram
 - TriggerInit(appJSONPath)：读取 app.json（包含内嵌 Function 配置），完成解析、校验和 Registry 初始化。
 - EventTriggerNotify：最小事件、来源函数和数据地址通知。
 - Function / Bucket / DIRECT / Trigger 索引。
-- Task Builder.Args[]。
+- Task Builder 构建并按值传递五字段任务请求。
 - CPU / Memory 资源预检查。
 - TryEnqueue 调用与 Delay Queue。
 
 #### 11.7.2 上游 Data Bucket SDK 负责
 
 - Commit 成功后调用 EventTriggerNotify。
-- 传递 Bucket、Key、SessionID、sourceFuncName、dataAddr。
+- 传递 Bucket、Key、SessionID、source、dataAddr。
 - 保证数据地址在 Session 相关任务完成或终止前有效。
 - Session 结束后回收数据。
 - Function 输出对象时注入当前 FuncName。
@@ -1214,19 +1101,19 @@ sequenceDiagram
 - 运行期提供唯一 TryEnqueue(task TaskInvocation)。
 - 不要求 ctx 参数或静态 Function 注册。
 - 原子入队、队列消费和协程唤醒。
-- 根据 SOName + FuncName 加载并执行 Function。
-- 复制任务描述符和 Args 切片，不复制、不释放上游数据内容。
+- 根据 AppName + SOName + FuncName 加载并执行 Function。
+- 保存执行请求，不复制、不释放上游数据内容。
 
 #### 11.7.4 联调验收清单
 
 - 上游只使用 TriggerInit 和 EventTriggerNotify 两个 API。
 - TriggerInit 只接收 app.json 路径，并解析内嵌 functions[]。
 - DataReadyEvent 只有 Bucket、Key、SessionID。
-- sourceFuncName 是独立参数，外部 Actor 使用 FunctionIdentity{}。
+- source 是独立参数，外部 Actor 使用 FunctionIdentity{}。
 - dataAddr 与上游 Commit 对象一致。
 - 不存在 DataRef Adapter 或 DataRef 相关 API。
 - 当前 App 内的 (so_name, func_name) 组合唯一，DIRECT 按该组合匹配来源。
-- TaskInvocation 携带 FunctionInfo 和 Args[]，每个任务的 Args 长度为 1。
+- TaskInvocation 的 App、目标函数、会话和地址均与已注册目标及通知一致。
 - 下游 Pool 只有 TryEnqueue，不带 ctx。
 - 不存在 Pool 静态 Function 注册 API。
 - Task Router 在 TryEnqueue 前执行 CPU / Memory 资源预检查。
@@ -1239,7 +1126,6 @@ sequenceDiagram
 <a id="part-4"></a>
 
 ## 第四部分：工程实现设计
-
 
 ## 第 12 章 Go 工程结构
 
@@ -1262,7 +1148,7 @@ pheromone-mini/
 - registry 依赖 config，负责索引构建和只读查询。
 - direct_dependency 与 event_trigger 只读取 Registry 索引。
 - task_builder 依赖 TaskAction、事件数据视图和 Function Index，不调用 Data SDK。
-- task_router 依赖 TaskInvocation.Function.Resource、Resource Probe、Pool TryEnqueue 和 Delay Queue。
+- task_router 依赖 Router 内部 FunctionInfo.Resource、Resource Probe、Pool TryEnqueue 和 Delay Queue。
 - Resource Probe 不依赖 Trigger 或 Task Builder。
 - Pool 内部实现不进入本模块；本模块只依赖 TryEnqueue 契约。
 
@@ -1270,7 +1156,7 @@ pheromone-mini/
 
 - 对外类型使用明确字段名。
 - DataAddr 使用 unsafe.Pointer 表示上游共享内存 / mmap 地址；不得将普通 Go Heap 指针作为跨异步任务的借用数据地址，除非上游保证其在整个生命周期内固定。
-- 对异步任务需要持有的字符串和 Args 切片进行复制；不复制 DataAddr 指向的数据内容。
+- Router 保存重试任务及其诊断元数据。SDK 保持批数据入口及其引用的数据有效。
 - 不把 unsafe.Pointer 转成 uintptr 后长期保存。
 - Registry 配置发布后只读；索引查询不修改配置。
 - 错误使用 Go error；EventTriggerNotify 对外只区分未初始化、参数非法和内部错误三类。
@@ -1295,7 +1181,7 @@ Registry 是单进程单实例，不提供外部 create / register / seal / dest
 - 用户先按附录 B 自行编写 app.json，再串行调用 TriggerInit；所有预期 App 的初始化均成功返回后，才允许发送 EventTriggerNotify。初始化与通知不得并发。
 - 内部状态为 Uninitialized、Initializing、Ready、Running。首次初始化失败回到 Uninitialized；追加 App 初始化失败保留已有索引并回到 Ready，调用方须修复失败配置后再开放事件。
 - 未初始化或仍在初始化时收到通知，返回 ErrNotInitialized，不匹配、不构建、不提交任务。
-- Ready 中首个通过参数和 Bucket / 来源函数校验的通知将状态切换为 Running；非法通知不触发切换。Running 只读，不接受后续 TriggerInit；该调用返回带原因的初始化错误。
+- Ready 中首个通过参数和 App / 来源函数校验的通知将状态切换为 Running；非法通知不触发切换。Running 只读，不接受后续 TriggerInit；该调用返回带原因的初始化错误。
 - 调用方负责确认全部 App 已初始化，无需新增 seal API。
 
 ### 13.2 Function 与索引唯一性
@@ -1305,12 +1191,12 @@ Registry 是单进程单实例，不提供外部 create / register / seal / dest
 - Function 记录以 so_name + func_name 作为执行入口组合标识。
 - FunctionInfo.Resource 与对应 Function 记录绑定。
 - DIRECT 索引以当前 App + (so_name, func_name) 为键，目标为函数标识列表。
-- Bucket 在当前 Registry 所有 App 之间全局唯一。
+- Bucket 规则按 App 隔离，同名 Bucket 可跨 App 独立使用。
 - Trigger 目标解析为 (so_name, func_name)。
 
 ### 13.3 EventTriggerNotify 并发
 
-DataReadyEvent 和 sourceFuncName 是只读借用值，在调用期间有效。Task Builder 必须复制后续异步任务所需的 Bucket、Key、SessionID 等字符串。
+DataReadyEvent 和 source 是只读借用值，在调用期间有效。Task Builder 必须复制后续异步任务所需的 Bucket、Key、SessionID 等字符串。
 
 DataAddr 不复制、不释放。上游必须保证数据地址在 Session 结束且该 Session 产生的所有任务（包括 Delay Queue 项）完成或终止之前有效。
 
@@ -1320,12 +1206,12 @@ DataAddr 不复制、不释放。上游必须保证数据地址在 Session 结�
 
 - Task Builder 构建阶段：创建任务描述符和字符串副本。
 - Task Router 持有阶段：Router 拥有任务描述符；DataAddr 仍为借用。
-- TryEnqueue = Accepted：Pool 在返回前复制后续执行所需的 TaskInvocation / Args 描述符；Router 可释放自己的元数据副本。
-- TryEnqueue = NoCapacity / Error：Pool 不保留调用方可变 Args 切片引用；Router 继续持有或终止任务。
+- TryEnqueue = Accepted：Pool 持有其接收的 TaskInvocation 值。
+- TryEnqueue = NoCapacity / Error：Pool 未接收任务，Router 按返回值决定重试或终止。
 - Delay Queue：Router 持有元数据副本，并继续借用 DataAddr。
 - 任务完成或终止：Pool / Router 释放各自拥有的元数据；数据内存由上游按 Session 规则回收。
 
-Go string 不可变，可以共享其底层字节；Args 是 slice，跨异步边界必须复制 slice 本身及其元素描述符。
+Go string 不可变，可共享其底层字节。TaskInvocation 按值传递。
 
 ### 13.5 Session 数据生命周期责任边界
 
@@ -1335,9 +1221,9 @@ Data SDK 全权负责 Session 生命周期、任务完成判定及数据回收�
 
 ### 14.1 资源预检查原则
 
-1. 从 TaskInvocation.Function.Resource 读取该 Function 的静态资源需求。
+1. 从 Router 内部 FunctionInfo.Resource 读取该 Function 的静态资源需求。
 2. 获取当前进程可见的 CPU / Memory 限额与使用量。
-3. 比较 CPUCores、MemoryMB 及§14.7 中任务已声明的资源；所有要求维度都通过才提交。完整需求随 FunctionInfo 传给 Pool。
+3. 比较 CPUCores、MemoryMB 及§14.7 中任务已声明的资源；所有要求维度都通过才提交。Router 在内部持有完整资源配置。
 4. 不满足时记录 RESOURCE_INSUFFICIENT；探测 / 解析 / 计算失败时记录 RESOURCE_PROBE_FAILED。两者均不调用 TryEnqueue，打印原因日志并判断 scheduler.delay_queue.enabled；启用则进入 / 保留 Delay Queue，未启用则终止本次路由。
 5. 满足时调用 Pool TryEnqueue。
 
@@ -1398,7 +1284,7 @@ type RouterPendingTask struct {
 }
 ~~~
 
-Router PendingTask 拥有 TaskInvocation 的描述符和 Args 切片副本，但不拥有 DataAddr 指向的数据内存。
+Router PendingTask 保留 TaskInvocation、目标函数配置和重试状态。批数据内存仍由 SDK 管理。
 
 ### 14.5 延时调度状态机
 
@@ -1463,7 +1349,7 @@ CPU / Memory 总是检查。GPU 声明 required=true 或任一 GPU 数值非零�
 
 ### 15.2 结构化日志字段
 
-建议字段：trace_seq、app_name、bucket、key、session_id、source_so_name、source_func_name、so_name、func_name、route_path、trigger_name、input_mode、args_count、resource_check、delay_reason、probe_failure_reason、delay_enabled、deadline、cpu_available、memory_available、pool_result、delay_state、elapsed_ms、dispatched。内部诊断字段不进入公共 API。日志字段 `input_mode` 记录运行时 `TaskInvocation.InputMode`。
+建议字段包括 app_name、bucket、key、session_id、source_so_name、source_func_name、so_name、func_name、route_path、trigger_name、delay_reason、probe_failure_reason、deadline 与 pool_result。
 
 ### 15.3 性能原则
 
@@ -1498,7 +1384,7 @@ CPU / Memory 总是检查。GPU 声明 required=true 或任一 GPU 数值非零�
 
 1. JSON Parser、app.json 配置校验和内部 Registry。
 2. Event Trigger：Immediate / ByName / DIRECT。
-3. Task Builder：Args[] 和元数据复制。
+3. Task Builder：五字段请求和批数据地址透传。
 4. Task Router：CPU / Memory 预检查、TryEnqueue、Delay Queue。
 5. 实现测试事件发生器、Fake Pool 自检、资源 / 时钟夹具；完成单元及内部链路验收。
 6. 增加 Mock SDK 输出回流、异步测试函数和最终结果断言，完成 Mock 端到端验收。
@@ -1518,7 +1404,6 @@ CPU / Memory 总是检查。GPU 声明 required=true 或任一 GPU 数值非零�
 
 ## 第五部分：需求追踪与测试验收
 
-
 > 当前为测试设计，未代表测试执行通过。各模块并行开发期间先完成本模块独立验收和 Mock 端到端验收，真实上下游联调单独记录。具体测试环境、脚本约束和场景见[附录 E](#part-11)。
 
 ## 第 17 章 功能需求与验收矩阵
@@ -1530,7 +1415,7 @@ CPU / Memory 总是检查。GPU 声明 required=true 或任一 GPU 数值非零�
 | APP | TriggerInit、app.json 解析、索引 | 5 | TEST-APP |
 | DIR | DIRECT 独立依赖、来源函数和目标展开 | 6 | TEST-DIR |
 | EVT | Immediate / ByName、多 Trigger、路径优先级 | 7 | TEST-EVT |
-| TSK | InputMode、Args[]、TaskInvocation | 8 | TEST-TSK |
+| TSK | 批数据地址、五字段 TaskInvocation | 8 | TEST-TSK |
 | RTE | CPU / Memory 预检查、TryEnqueue、Delay Queue | 9、14 | TEST-RTE |
 | API | 两个上游 API、Pool TryEnqueue、FunctionInfo 契约 | 03 | TEST-API |
 
@@ -1539,7 +1424,7 @@ CPU / Memory 总是检查。GPU 声明 required=true 或任一 GPU 数值非零�
 | 需求 ID | 测试追踪 |
 |---|---|
 | APP-01 / APP-02 | TEST-APP-01–04、15–16、TEST-API-02、12–15 |
-| APP-03 | Bucket 跨 App 重名拒绝及事件唯一定位（TEST-APP-14） |
+| APP-03 | 相同 Bucket 和 Key 跨 App 独立路由（TestPublication、MOCK-E2E-19） |
 | APP-04 / APP-05 | TEST-APP-05–09、11–13 |
 | APP-06 / APP-07 | TEST-APP-10、TEST-EVT-05、TEST-DIR-05 |
 | DIR-01–05 | TEST-DIR-01–09、TEST-API-04–05 |
@@ -1556,10 +1441,10 @@ CPU / Memory 总是检查。GPU 声明 required=true 或任一 GPU 数值非零�
 ### 17.2 验收原则
 
 1. 单元测试覆盖 app.json 解析、索引、DIRECT、Immediate、ByName、Task Builder 和 Task Router。
-2. 参数测试覆盖 Key 必填、DataAddr 非空及地址透传、Args 长度和 FunctionInfo。
+2. 参数测试覆盖事件五字段、来源三元组、地址透传和 Pool 请求字段。
 3. 并发测试覆盖本模块的通知、共享数据地址、多目标任务、提交返回处理和 Delay Queue。Fake Pool 的原子入队仅自检替身，真实 Pool 的原子入队由下游及联调验证。
 4. 资源测试覆盖 CPU / Memory 充足、不足、探测 / 计算失败及 cgroup v1 / v2；不得在 cgroup 读取失败时用主机值绕过限制。原始样本与真实 Linux 环境分别验证。
-5. 独立验收用测试事件发生器和 Fake Pool；Mock 端到端增加异步测试函数执行及输出事件回流。真实 Data SDK Commit、真实 Pool TryEnqueue 和 FunctionInfo 透传放在后续联调阶段。
+5. 独立验收用测试事件发生器和 Fake Pool；Mock 端到端增加异步测试函数执行及输出事件回流。真实 Data SDK Commit、真实 Pool TryEnqueue 和批数据读取放在后续联调阶段。
 6. 不执行 DataRef 引用计数、Inline 复制、Shared-Memory retain 等已删除设计的测试。
 7. 测试代码使用 Go；不保留 C11 / C ABI 示例作为 V0.6 实现契约。
 8. 替换 SDK、Pool、资源输入与时钟，不替换本模块的配置、匹配、任务构建、路由或延时逻辑；预期结果独立于实现给出。
@@ -1594,12 +1479,12 @@ A、B 可在上下游开发期间独立执行。不同层次的状态、缺陷�
 | TEST-APP-06 | Function 缺少 func_name | 初始化失败 |
 | TEST-APP-07 | 同一 App 内 (so_name, func_name) 重复 | 拒绝配置 |
 | TEST-APP-08 | 同一 SO 对应多个不同 func_name | 配置通过 |
-| TEST-APP-09 | 不同 App 存在同名 func_name | 允许；按 Bucket 所属 App 隔离 |
+| TEST-APP-09 | 不同 App 共用 SO 与函数组合且资源需求不同 | 允许，各 App 使用自己的资源配置 |
 | TEST-APP-10 | Trigger / DIRECT 引用不存在的 func_name | 初始化失败 |
 | TEST-APP-11 | so_name 包含路径穿越 | 拒绝配置 |
 | TEST-APP-12 | resource.cpu_cores 或 memory_mb 非法 | 初始化失败 |
 | TEST-APP-13 | gpu.device_count、gpu.memory_mb、disk_mb 或 network_mbps 为负数 | 初始化失败 |
-| TEST-APP-14 | 不同 App 使用同一 Bucket | 拒绝后一个 App，不损坏已发布索引 |
+| TEST-APP-14 | 不同 App 共享 Bucket 名和 Key | 均注册成功，只匹配通知所指定的 App |
 | TEST-APP-15 | 时间 / 内存换算上限及 uint32 / uint64 范围边界、超界、小数 | 合法边界无损解析；超界、小数或换算溢出在初始化时拒绝 |
 | TEST-APP-16 | 多 App 的 delay_queue 任一有效配置不一致 | 拒绝当前 App，保留已有 Registry 和全局延时配置 |
 
@@ -1612,10 +1497,10 @@ A、B 可在上下游开发期间独立执行。不同层次的状态、缺陷�
 | TEST-DIR-03 | 来源标识无 DIRECT 映射 | 进入 Bucket Trigger |
 | TEST-DIR-04 | 来源为 FunctionIdentity{} | 进入 Bucket Trigger |
 | TEST-DIR-05 | 来源标识不完整、库名不匹配或在当前 App 不存在 | 参数非法，不误匹配其他 App |
-| TEST-DIR-06 | DIRECT 目标函数 | TaskInvocation 携带 SOName + FuncName + Resource |
+| TEST-DIR-06 | DIRECT 目标函数 | TaskInvocation 含 AppName、FuncName、SOName、DataAddr、SessionID |
 | TEST-DIR-07 | DIRECT 命中且 Bucket 配置 Trigger | 本次事件只走 DIRECT |
-| TEST-DIR-08 | DIRECT 分别省略选项、设置 0 / 1 / 2，以及同来源不同目标分别配置模式 | 校验每个目标的 InputMode、Args 和实际测试函数输入视图；Key Only 不读取 Value；无 Bucket Trigger 调用 |
-| TEST-DIR-09 | DIRECT 选项为 null、非整数或越界，或重复来源／目标对 | 初始化失败，不发布该 App |
+| TEST-DIR-08 | 多个 DIRECT 目标接收同一批数据 | 每个目标独立提交，验证原批地址及消费结果 |
+| TEST-DIR-09 | 包含已移除的 trigger_option，或存在重复来源／目标对 | 初始化失败，不发布该 App |
 
 #### Event Trigger
 
@@ -1625,7 +1510,7 @@ A、B 可在上下游开发期间独立执行。不同层次的状态、缺陷�
 | TEST-EVT-02 | ByName Bucket + Key 完全匹配 | 命中 |
 | TEST-EVT-03 | ByName Key 不匹配 | 不命中 |
 | TEST-EVT-04 | 同 Bucket 两条 Trigger 均命中 | 生成两个独立 Task |
-| TEST-EVT-05 | Bucket 不存在 | 返回 ErrInvalidArgument，不跨 App 匹配 |
+| TEST-EVT-05 | 当前 App 下没有 Bucket 规则，来源也无 DIRECT 目标 | 成功返回，生成零个任务 |
 | TEST-EVT-06 | event.Key 为空 | 返回 ErrInvalidArgument |
 | TEST-EVT-07 | 未支持的 Bucket Trigger 原语或非 DIRECT 依赖 | TriggerInit 返回 ErrInvalidConfig（1004），不发布该 App |
 
@@ -1633,14 +1518,14 @@ A、B 可在上下游开发期间独立执行。不同层次的状态、缺陷�
 
 | 用例 | 输入 / 条件 | 预期结果 |
 |---|---|---|
-| TEST-TSK-01 | trigger_option=0 | InputValue |
-| TEST-TSK-02 | trigger_option=1 | InputKeyValue |
-| TEST-TSK-03 | trigger_option=2 | InputKeyOnly |
-| TEST-TSK-04 | 任意 InputMode | TaskArgument.Key 始终存在 |
-| TEST-TSK-05 | 有效数据地址 | Args[0] 保存原始地址，不复制数据 |
-| TEST-TSK-06 | 当前基础场景 | Args 长度为 1，Args[0] 正确 |
+| TEST-TSK-01 | 整批提交一次 | 每条命中规则派生一次任务 |
+| TEST-TSK-02 | 精确 Key 匹配 | BY_NAME 按原始 Key 匹配 |
+| TEST-TSK-03 | 同 Bucket 多条规则命中 | 分别提交五字段任务 |
+| TEST-TSK-04 | 事件 Key 为空 | ErrInvalidArgument |
+| TEST-TSK-05 | 有效批数据地址 | Pool 收到原始 DataAddr |
+| TEST-TSK-06 | Pool 接收任务 | 五个字段均正确 |
 | TEST-TSK-07 | 多目标命中 | 每个 Task 拥有独立参数描述符，DataAddr 相同 |
-| TEST-TSK-08 | EventTriggerNotify 返回后调用方释放元数据引用、延迟消费 | Task 的 Key / SessionID / Args 仍正确；不使用非法 Go 字符串内存模拟失效 |
+| TEST-TSK-08 | 延迟消费或重试 | AppName、SessionID 和 DataAddr 一致 |
 | TEST-TSK-09 | DataAddr=nil | 参数校验失败 |
 
 #### Task Router / Resource Probe
@@ -1681,14 +1566,14 @@ A、B 可在上下游开发期间独立执行。不同层次的状态、缺陷�
 
 | 用例 | 输入 / 条件 | 预期结果 |
 |---|---|---|
-| TEST-API-01 | DataReadyEvent 结构 | 只有 Bucket、Key、SessionID |
+| TEST-API-01 | DataReadyEvent 结构 | AppName、Bucket、Key、SessionID、DataAddr |
 | TEST-API-02 | TriggerInit | 只接收 app.json 路径，并解析内嵌 functions[] |
 | TEST-API-03 | EventTriggerNotify | 不包含 Registry 参数 |
-| TEST-API-04 | sourceFuncName 独立传入 | DIRECT 正确匹配 |
+| TEST-API-04 | source 独立传入 | DIRECT 正确匹配 |
 | TEST-API-05 | 外部 Actor 传 FunctionIdentity{} | 正常执行 Bucket Trigger |
 | TEST-API-06 | DataAddr | 与上游 Commit 对象一致 |
 | TEST-API-07 | TaskPool 接口 | 只有 TryEnqueue(task)，不带 ctx |
-| TEST-API-08 | TaskInvocation.Function | 同时包含 SOName、FuncName、Resource |
+| TEST-API-08 | TaskInvocation 结构 | AppName、FuncName、SOName、DataAddr、SessionID |
 | TEST-API-09 | Pool 静态注册 | 不存在 register_function_configs |
 | TEST-API-10 | Function Loader | 不属于本模块契约，不测试 dlopen / dlsym |
 | TEST-API-11 | 资源预检查 | 首次和每次重试均发生在 TryEnqueue 之前 |
@@ -1719,7 +1604,7 @@ A、B 可在上下游开发期间独立执行。不同层次的状态、缺陷�
 
 基本链路：真实初始化 → Mock SDK 写入并通知 → 真实规则 / Router → Fake Pool 异步消费 A → A 的输出经 Mock SDK 通知 → 真实规则触发 B → 核对最终字节结果。
 
-必须覆盖 Immediate / ByName / DIRECT、输入模式、多目标、资源不足 / 探测 / 计算失败的延时开关、队列满、恢复、持续失败超时、原因切换不延长 deadline、提交前再次查超时、队列满拒绝、并发、退出及多 App 隔离。重复通知按不同事件处理，不增加通知去重功能。
+必须覆盖 Immediate / ByName / DIRECT、批数据、多目标、资源不足 / 探测 / 计算失败的延时开关、队列满、恢复、持续失败超时、原因切换不延长 deadline、提交前再次查超时、队列满拒绝、并发、退出及多 App 隔离。重复通知按不同事件处理，不增加通知去重功能。
 
 Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自检；TryEnqueue 不等待容量恢复或执行结束；预期目标集合、次数和输出由夹具独立定义。资源和时钟必须可控，不能依赖固定 sleep 及宿主机偶发高负载。
 
@@ -1749,8 +1634,8 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 - Function 以 (so_name, func_name) 组合标识，该组合在 App 内唯一。
 - DIRECT 按来源的 (so_name, func_name) 查询目标函数。
 - Immediate / ByName 和多 Trigger 行为正确。
-- DataReadyEvent 仅三个字段，EventTriggerNotify 包含独立 sourceFuncName、dataAddr。
-- TaskInvocation.Args[] 正确，Key 必须。
+- 事件包含 AppName、Bucket、Key、SessionID、DataAddr，来源函数标识单独传入。
+- Pool 按值接收五字段 TaskInvocation，批地址保持一致。
 - 不存在 DataRef、INLINE / SHARED_MEMORY 和相关生命周期接口。
 - Task Router 在 TryEnqueue 前执行 CPU / Memory 预检查。
 - 资源不足、探测或计算失败不调用 TryEnqueue，记录原因后与 Pool NoCapacity 一样按 enabled 暂存重试或终止；Pool Error 不延时。
@@ -1791,7 +1676,6 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 
 ## Pheromone-mini V0.6 分功能需求列表
 
-
 ## 1. 文档目的
 
 本文将 V0.6 冻结设计拆解为可实现、可测试、可验收的功能需求。需求以 Pheromone 的 DIRECT、Bucket Trigger 和函数参数传递机制为基础，适配 Go、单进程单调度实例和统一数据地址传递。
@@ -1800,7 +1684,7 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 
 ### 2.1 角色
 
-- **上游 Data Bucket SDK：** Commit 数据、提供 bucket / key / session_id、sourceFuncName（FunctionIdentity）、data_addr，调用通知 API，并负责 Session 生命周期。
+- **上游 Data Bucket SDK：** Commit 数据、提供 bucket / key / session_id、source（FunctionIdentity）、data_addr，调用通知 API，并负责 Session 生命周期。
 - **本模块：** TriggerInit、JSON Parser、App Registry、DIRECT Dependency、Event Trigger、Task Builder、Task Router、Delay Queue。
 - **下游 Task Coroutine Pool：** 唯一提供 TryEnqueue(TaskInvocation)，负责队列消费、协程调度、SO / Function 加载和执行。
 
@@ -1809,14 +1693,14 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 - 实现语言为 Go；单进程、单个调度实例；Registry 为模块内部唯一实例。
 - 对上游只暴露 TriggerInit(appJSONPath) 和 EventTriggerNotify 两个 API。
 - TriggerInit 读取 app.json，解析内嵌 functions[]；全部 Function 配置直接内嵌其中。
-- DataReadyEvent 仅 Bucket、Key、SessionID。
-- sourceFuncName、dataAddr 作为 EventTriggerNotify 独立参数。
+- DataReadyEvent 包含 AppName、Bucket、Key、SessionID、DataAddr。
+- DataAddr 随事件传递，来源 FunctionIdentity 单独透传。
 - 数据统一通过 dataAddr 传递，不区分大小数据包。
 - 不存在 DataRef、INLINE / SHARED_MEMORY、validate / retain / release。
-- Key 在 TaskArgument 中必须存在。
+- 事件 Key 必填，供 BY_NAME 匹配。
 - (so_name, func_name) 在当前 App 内唯一。
 - DIRECT 按来源的 (so_name, func_name) 查询目标函数。
-- FunctionInfo（so_name、func_name、resource）随 TaskInvocation 传给 Pool。
+- Pool 只接收 AppName、FuncName、SOName、DataAddr、SessionID。
 - Pool 只提供 TryEnqueue，不带 ctx；不提供静态 Function 注册 API。
 - Task Router 在 TryEnqueue 前执行 CPU / Memory 资源预检查。
 - 资源不足、探测失败、计算失败和 Pool NoCapacity 都按延时配置暂存重试或终止；资源类失败不调用 TryEnqueue。
@@ -1834,10 +1718,10 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 - **行为：** 用户按附录 B 编写 app.json；functions[] 每项直接包含 Function 配置，模块不生成业务配置、不读取额外函数配置文件。
 - **验收：** Function 必填字段、类型、唯一性和引用均合法后才发布；不支持外部配置路径；数值须无损解析，内存 / 时间换算边界及多 App 延时配置一致性按附录 B 校验。
 
-### APP-03：Bucket 全局唯一
+### APP-03：Bucket 按 App 隔离
 - **优先级：** P0
-- **行为：** Bucket 在当前 Registry 的全部 App 范围内全局唯一。
-- **验收：** event.Bucket 能唯一定位所属 App。
+- **行为：** 同名 Bucket 可跨 App 使用，规则由各自的 Trigger 配置建立。
+- **验收：** event.AppName 和 event.Bucket 定位到该 App 的规则。
 
 ### APP-04：Function 双标识与资源配置
 - **优先级：** P0
@@ -1868,37 +1752,37 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 
 ### DIR-02：来源 Function 识别
 - **优先级：** P0
-- **输入：** EventTriggerNotify 的 sourceFuncName。
-- **行为：** Function 写出对象时，Object SDK 从 TaskContext 注入 SOName 和 FuncName；外部 Actor 传 FunctionIdentity{}。
+- **输入：** EventTriggerNotify 的 source。
+- **行为：** Function 写出对象时，Object SDK 从 TaskContext 注入 AppName、SOName 和 FuncName；外部 Actor 传 FunctionIdentity{}。
 - **验收：** 来源的 so_name 和 func_name 均须精确匹配当前 App 的函数定义。
 
 ### DIR-03：目标函数展开
 - **优先级：** P0
-- **行为：** sourceFuncName 对应多个 target func_name 时，每个目标生成独立 Task。
-- **验收：** 每个 Task 携带对应 FunctionInfo（so_name + func_name + resource）。
+- **行为：** source 对应多个 target func_name 时，每个目标生成独立 Task。
+- **验收：** 每个 Task 携带目标 App、SO、函数名、会话和批地址。
 
 ### DIR-04：DIRECT 优先级
 - **优先级：** P0
 - **行为：** 存在 DIRECT 目标时走 DIRECT，跳过本次 Bucket Trigger；无 DIRECT 目标或来源为零值时进入 Bucket Trigger。
 - **验收：** 不同时执行 DIRECT 和 Bucket Trigger。
 
-### DIR-05：DIRECT 输入模式
-- **优先级：** P0
-- **行为：** 每条 DIRECT 依赖可选 `trigger_option`，整数 `0`（默认，Value）、`1`（Key + Value）、`2`（Key Only）。同一条依赖的所有目标使用同一模式，需要不同模式时拆成多条依赖。同一 App 内重复的 DIRECT 来源／目标对在初始化时拒绝。
-- **验收：** TaskArgument 包含必填 Bucket、SessionID、Key 和 DataAddr。
+### DIR-05：DIRECT 批数据传递
+
+- **行为** 每个目标借用相同的 DataAddr。
+- **验收** 初始化拒绝同一 App 内重复的 DIRECT 来源／目标对。
 
 ## 5. Event Trigger 需求
 
 ### EVT-01：Commit 成功后通知
 - **优先级：** P0
 - **行为：** 仅数据 Commit 成功后调用 EventTriggerNotify。
-- **验收：** 通知携带正确的 Bucket、Key、SessionID、sourceFuncName、dataAddr。
+- **验收：** 通知携带正确的 Bucket、Key、SessionID、source、dataAddr。
 
 ### EVT-02：最小 DataReadyEvent
 - **优先级：** P0
-- **字段：** Bucket、Key、SessionID。
-- **行为：** sourceFuncName 和 dataAddr 分别作为独立参数传入。
-- **验收：** DataReadyEvent 不存在 Registry、PayloadType、DataRef、AppName 等字段。
+- **字段：** AppName、Bucket、Key、SessionID、DataAddr。
+- **行为：** DataAddr 随事件传递，来源 FunctionIdentity 单独传入。
+- **验收：** AppName 与 Bucket 决定查询范围，Key 用于 BY_NAME 匹配。
 
 ### EVT-03：Immediate
 - **优先级：** P0
@@ -1922,43 +1806,20 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 
 ### EVT-07：事件参数校验
 - **优先级：** P0
-- **行为：** Bucket、Key、SessionID 必须非空；DataAddr 必须非空。
+- **行为：** AppName、Bucket、Key、SessionID 必须非空；DataAddr 必须非空。
 - **验收：** 非法参数返回 ErrInvalidArgument。
 
 ## 6. Task Builder 需求
 
-### TSK-01：输入模式映射
-- **优先级：** P0
-- **行为：** trigger_option 0 / 1 / 2 分别映射 InputValue / InputKeyValue / InputKeyOnly；DIRECT 按依赖项配置选择，缺省为 InputValue。
-- **验收：** InputMode 不再控制数据载体类型。
+### TSK-01 至 TSK-05
 
-### TSK-02：TaskArgument 构建
-- **优先级：** P0
-- **字段：** Bucket、SessionID、Key 和 DataAddr。
-- **行为：** 一次通知携带一个对象；每个任务的 Args 长度为 1。
-- **验收：** Key 必须；DataAddr 与通知参数一致。
-
-### TSK-03：TaskInvocation 构建
-- **优先级：** P0
-- **字段：** FunctionInfo、InputMode、Args。
-- **行为：** 每个目标 Function 独立构建 TaskInvocation。
-- **验收：** TaskInvocation 不携带 DataRef、PayloadType、固定 handler 或 Trigger 内部元数据。
-
-### TSK-04：异步元数据复制
-- **优先级：** P0
-- **行为：** 复制 Bucket、Key、SessionID、SOName、FuncName 等异步任务需要持有的字符串及 Args 切片；不复制 DataAddr 指向的数据。
-- **验收：** EventTriggerNotify 返回后调用方临时字符串失效，不影响排队任务；DataAddr 仍由上游保证有效。
-
-### TSK-05：多目标数据地址共享
-- **优先级：** P0
-- **行为：** 多个命中目标使用同一 DataAddr，但拥有独立 TaskInvocation / Args 描述符。
-- **验收：** 任一任务完成不导致其他任务数据失效。
+一次通知对应一次批数据提交。Task Builder 为每条命中路径构造五字段 TaskInvocation。多个任务可共享批数据地址，SDK 在相关任务全部结束前保持地址与内容有效。
 
 ## 7. Task Router 需求
 
 ### RTE-01：Function 资源查询
 - **优先级：** P0
-- **行为：** 从 TaskInvocation.Function.Resource 读取目标 Function 的 CPU / Memory 需求。
+- **行为：** 从 Router 内部 FunctionInfo.Resource 读取目标 Function 的 CPU / Memory 需求。
 - **验收：** Resource 缺失或非法不得提交任务。
 
 ### RTE-02：CPU / Memory 可用资源预检查
@@ -2011,18 +1872,17 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 
 ### API-02：EventTriggerNotify
 - **优先级：** P0
-- **行为：** 本模块提供 EventTriggerNotify(event, sourceFuncName, dataAddr)。
-- **验收：** DataReadyEvent 只有 Bucket、Key、SessionID；数据地址和来源函数为独立参数。
+- **行为：** 本模块提供 EventTriggerNotify(event, source)。
+- **验收：** DataReadyEvent 含 AppName、Bucket、Key、SessionID、DataAddr，来源函数标识单独传入。
 
 ### API-03：Pool TryEnqueue
 - **优先级：** P0
 - **行为：** 下游只提供 TryEnqueue(task TaskInvocation)；实例创建和装配由下游 / 集成方负责，本模块仅调用 API。
 - **验收：** 不带 ctx，不存在 register_function / unregister_function / wake_one Adapter 回调。
 
-### API-04：FunctionInfo 透传
-- **优先级：** P0
-- **行为：** TaskInvocation 携带 SOName、FuncName 和 Resource。
-- **验收：** 不需要 Pool 静态 Function 注册 API。
+### API-04：Pool 请求字段
+
+Pool 只接收 AppName、FuncName、SOName、DataAddr、SessionID。Router 内部按目标函数配置做资源准入。
 
 ### API-05：数据地址责任边界
 - **优先级：** P0
@@ -2063,15 +1923,14 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 2. Function 通过 so_name + func_name 独立标识。
 3. DIRECT 按来源的 (so_name, func_name) 匹配。
 4. Immediate / ByName 匹配正确。
-5. EventTriggerNotify 只接收最小事件结构和独立数据参数。
-6. Task Builder 构建正确的 Args[]。
+5. EventTriggerNotify 接收五字段事件和来源标识。
+6. Task Builder 构建正确的五字段请求。
 7. Task Router 先检查 CPU / Memory，再调用 TryEnqueue。
 8. Pool 唯一接口为不带 ctx 的 TryEnqueue。
 9. 数据有效性、任务完成判定及回收由 Data SDK 管控，本模块不释放借用地址。
 10. 不存在 DataRef、双数据载体、Pool 静态 Function 注册和 Execution 配置。
 
 验收证据按[第五部分](#part-5)和[附录 E](#part-11)分阶段提供：P0 需求先通过单元及本模块链路，再用 Mock SDK / Fake Pool 验证最终输出、异常和并发；真实上下游联调独立记录。Mock 测试不新增业务 API、Session 回收机制或真实 Pool 装配职责。文档中的需求完成判定不是测试已通过声明。
-
 
 ## 12. 资源准入补充需求
 
@@ -2120,7 +1979,7 @@ Pheromone 的 AppRegistration / DataDependency 使用 DIRECT 类型以及来源�
 - [app_register_handler.cpp：DIRECT 依赖保留](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/coordinator/app_register_handler.cpp)
 - [scheduler_server.cpp：DIRECT 分支优先于 Trigger 检查](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/scheduler/scheduler_server.cpp)
 
-V0.6 保留 DIRECT 独立路径、来源 Function 到多个目标 Function 的映射，以及 DIRECT 优先于 Bucket Trigger 的规则。每条 DIRECT 配置只声明一个来源函数，多个目标放入 tgt_functions；DIRECT 的输入模式可由依赖项配置，缺省为 InputValue。固定提交的上游 `DataDependency` 没有 `trigger_option`，本地 DIRECT 分支依据数据打包方式构造参数和 `arg_flag`。0 / 1 / 2 三种输入语义取自上游 Bucket Trigger；在 DIRECT 配置中开放这三项是 V0.6 的设计。
+V0.6 保留 DIRECT 独立路径、单来源多目标映射与 DIRECT 优先级。所有目标接收本次提交的整批数据地址。
 
 ## A.4 Bucket 与 Trigger
 
@@ -2134,26 +1993,11 @@ V0.6 保留 Immediate、ByName、同 Bucket 多 Trigger 独立匹配和 Trigger 
 
 ## A.5 Data Bucket 与通知字段
 
-Pheromone 的 KVS 通知包含 BucketKeyAddress、Payload、数据地址和通信控制信息。V0.6 裁剪为：
-- DataReadyEvent：bucket、key、session_id；
-- sourceFuncName：独立参数，包含 so_name 和 func_name；
-- data_addr：独立参数，统一地址传递。
-
-V0.6 不接收 app_name、active_trigger_names、ips、response_address、request_id、trigger_name、target_function、payload_type 或 DataRef。Bucket 在当前 Registry 全局唯一，本模块自行反查 App。
+本项目以 app_name + bucket + key 标识数据，事件包含会话与本次提交的批数据入口。来源函数标识单独透传。
 
 ## A.6 下游执行消息
 
-Pheromone Local Scheduler 向 Executor 发送的本地执行消息核心是函数标识、Session、参数模式和参数内容；Trigger 元数据不传给 Executor。
-
-V0.6 收敛为 TaskInvocation：
-- SessionID；
-- FunctionInfo：so_name、func_name、resource；
-- InputMode；
-- Args[]：Key 和 DataAddr。
-
-FunctionInfo 随每个 TaskInvocation 通过 TryEnqueue 传递，不通过单独静态注册 API 交付。Pool 自行消费队列和唤醒协程。
-
-参考：[scheduler_server.cpp](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/scheduler/scheduler_server.cpp)、[executor_server.cpp](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/executor/executor_server.cpp)。
+Pool 接收五字段 TaskInvocation，并负责队列消费与执行。
 
 ## A.7 本期明确裁剪
 
@@ -2262,12 +2106,7 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
       }
     }
   ],
-  "buckets": [
-    "b_input",
-    "b_shared",
-    "b_direct_output",
-    "b_result"
-  ],
+
   "dependencies": [
     {
       "type": "DIRECT",
@@ -2276,8 +2115,7 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
       ],
       "tgt_functions": [
         "direct_processor"
-      ],
-      "trigger_option": 0
+      ]
     }
   ],
   "triggers": [
@@ -2287,8 +2125,7 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
       "primitive_type": "IMMEDIATE",
       "primitive": {
         "function": "producer"
-      },
-      "trigger_option": 0
+      }
     },
     {
       "bucket": "b_shared",
@@ -2296,8 +2133,7 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
       "primitive_type": "IMMEDIATE",
       "primitive": {
         "function": "processor"
-      },
-      "trigger_option": 0
+      }
     },
     {
       "bucket": "b_shared",
@@ -2306,8 +2142,7 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
       "primitive": {
         "function": "processor",
         "key_name": "ready"
-      },
-      "trigger_option": 1
+      }
     }
   ]
 }
@@ -2315,7 +2150,7 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
 
 ## B.3 用户编写与启动步骤
 
-1. 确定 App 名称和 Bucket 名称；Bucket 必须跨 App 唯一。
+1. 为每个 App 指定唯一的 app_name，并在 triggers[].bucket 中填写触发规则所使用的 Bucket。
 2. 在 functions[] 逐项填写 SO 名、函数名和资源需求；共享库名与函数名的组合在当前 App 内唯一。
 3. 用这些函数名编写 DIRECT 和 Trigger；设置 Delay Queue。
 4. 保存为 app.json，调用 TriggerInit(appJSONPath) 并检查返回 error；失败则修改配置后重试。
@@ -2335,7 +2170,6 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
 | scheduler.delay_queue.max_wait_ms | integer | 必填；1..9223372036854，且不小于 retry_interval_ms；从首次可延时原因计时，重试不重置 |
 | functions | array(object) | 必填，至少一个 |
 | functions[] | object | 直接包含下表 Function 字段；不接受外部配置路径 |
-| buckets | array(string) | 必填；跨 App 全局唯一 |
 | dependencies | array(object) | 可为空；DIRECT |
 | triggers | array(object) | 可为空；IMMEDIATE / BY_NAME |
 
@@ -2364,57 +2198,22 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 | type | string | DIRECT |
 | src_functions | array(函数引用) | 必填；恰好一个来源函数 |
 | tgt_functions | array(函数引用) | 必填；至少一个目标函数 |
-| trigger_option | integer | 可选；在 `dependencies[]` 中仅 DIRECT 支持；0 = Value（默认），1 = Key + Value，2 = Key Only |
 
 来源和目标必须属于同一 App 的 functions。函数引用可写为 `{"so_name":"reader.so","func_name":"read"}`。字符串简写 `"read"` 仅在当前 App 内恰好有一个同名函数时有效；同名函数存在于多个共享库时，必须用对象指定库名和函数名。一个来源可对应多个目标；多个来源拆成多条依赖配置。
 
-字段写在 `dependencies[]` 的 DIRECT 对象内。完整 `app.json` 示例显式设置 `0`，目标函数收到 Value。省略字段时效果相同。以下两段配置可分别替换完整示例中的同一条依赖。
-
-**Key + Value（1）**
-
-~~~json
-{
-  "type": "DIRECT",
-  "src_functions": [
-    "direct_source"
-  ],
-  "tgt_functions": [
-    "direct_processor"
-  ],
-  "trigger_option": 1
-}
-~~~
-
-**Key Only（2）**
-
-~~~json
-{
-  "type": "DIRECT",
-  "src_functions": [
-    "direct_source"
-  ],
-  "tgt_functions": [
-    "direct_processor"
-  ],
-  "trigger_option": 2
-}
-~~~
-
-选择 `2` 时，Pool 向目标函数提供 Key。所有目标共用当前依赖项的模式。
+初始化时拒绝同一 App 内重复的 DIRECT 来源／目标对。两种函数引用写法继续有效，运行时从顶层 app_name 补齐函数标识。
 
 ### Bucket 与 Trigger
 
 | 字段 | 类型 | 约束 |
 |---|---|---|
-| buckets[] | string | 当前 Registry 全局唯一 |
-| bucket | string | Trigger 必填，必须在本 App buckets 中 |
+| bucket | string | Trigger 必填，非空。规则按当前 App 索引 |
 | trigger_name | string | App 内唯一 |
 | primitive_type | string | IMMEDIATE / BY_NAME |
 | primitive.function | 函数引用 | 已注册的目标函数，支持 (so_name, func_name) 对象或无歧义的字符串简写 |
 | primitive.key_name | string | BY_NAME 必填；IMMEDIATE 禁止 |
-| trigger_option | integer | 0 / 1 / 2；默认 0 |
 
-`trigger_option` 是 `app.json` 中 DIRECT 依赖项和 Bucket Trigger 的可选整数配置，省略时按 `0` 处理。解析配置时，`0`、`1`、`2` 分别映射为 Go 类型 `InputMode` 的 `InputValue`、`InputKeyValue`、`InputKeyOnly`，运行时写入 `TaskInvocation.InputMode`。 同一条 DIRECT 依赖的所有目标使用同一模式。不同目标需要不同模式时，拆成多条依赖。初始化时拒绝同一 App 内重复的 DIRECT 来源／目标对。
+旧配置需移除 `trigger_option` 和顶层 `buckets`。严格 JSON 校验会拒绝这两个字段。
 
 ### 资源探测配置
 
@@ -2429,22 +2228,21 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 ## B.5 校验规则
 
 1. 拒绝非法 JSON、重复字段、未知字段、错误类型和超长输入。
-2. app_name 在 Registry 内唯一；Bucket 跨全部 App 全局唯一。
+2. app_name 在 Registry 内唯一。不同 App 可使用同名 Bucket。
 3. functions[] 必须是非空对象数组，Function 字段直接内嵌。
 4. 每项 Function 结构必须合法，so_name、func_name 必填；拒绝外部配置路径。
 5. (so_name, func_name) 组合在当前 App 内唯一；同一个 so_name 可包含多个函数，不同 so_name 可声明同名函数。
-6. 同一 so_name + func_name 被多个 App 复用时，Resource 必须一致。
+6. 不同 App 可以对相同 SO 和函数组合配置各自的资源需求。
 7. 依赖只接受 DIRECT，其他类型在初始化时拒绝。每条 DIRECT 配置必须只有一个 src_functions 项，tgt_functions 至少一个；来源和目标都必须存在。
-8. Trigger 的 Bucket 必须存在，目标函数引用必须能唯一解析；trigger_name 在 App 内唯一。
+8. Trigger 的 Bucket 必须非空，目标函数引用必须能唯一解析；trigger_name 在 App 内唯一。
 9. 仅接受 IMMEDIATE、BY_NAME；ByName 必须配置非空 key_name，Immediate 禁止 key_name。
-10. trigger_option 只允许 0、1、2。
+10. Trigger 的 bucket 必须是非空名称。
 11. Delay Queue enabled 必须为布尔值；时间间隔和最大等待时间必须为正整数。
 12. 拒绝 execution、resource.timeout_ms、DataRef 和旧的双数据载体字段；Resource 中 GPU、Disk、Network 数值必须非负。
 13. 当前 App 的全部配置必须整体校验成功后才发布；任一内嵌 Function 校验失败不得留下部分 AppRecord。
 14. 所有整数字段无损解析，不经 float64 中转：gpu.device_count 在 uint32 范围，其余无符号资源整数字段在 uint64 范围；拒绝小数、负数或超范围值。CPU 必须为可表示的有限正浮点数。
 15. retry_interval_ms / max_wait_ms 换算 time.Duration 前检查 int64 纳秒上限；memory_mb 换算字节前检查 uint64 上限。超界在 TriggerInit 阶段拒绝，不留到运行时反复延时；运行时样本计算仍做防御检查。
 16. 多 App 的 delay_queue 三项有效配置必须完全一致；不一致拒绝当前 App，不改动已发布 Registry 和进程级延时配置。
-
 
 ## B.6 资源配置示例
 
@@ -2476,18 +2274,18 @@ package pheromonemini
 import "unsafe"
 
 type DataReadyEvent struct {
+    AppName   string
     Bucket    string
     Key       string
     SessionID string
+    DataAddr  unsafe.Pointer
 }
 
-type InputMode uint8
-
-const (
-    InputValue InputMode = iota
-    InputKeyValue
-    InputKeyOnly
-)
+type FunctionIdentity struct {
+    AppName  string
+    SOName   string
+    FuncName string
+}
 
 type GPUResourceSpec struct {
     Required    bool
@@ -2509,17 +2307,12 @@ type FunctionInfo struct {
     Resource ResourceSpec
 }
 
-type TaskArgument struct {
-    Bucket    string
-    SessionID string
-    Key       string
-    DataAddr  unsafe.Pointer
-}
-
 type TaskInvocation struct {
-    Function  FunctionInfo
-    InputMode InputMode
-    Args      []TaskArgument
+    AppName   string
+    FuncName  string
+    SOName    string
+    DataAddr  unsafe.Pointer
+    SessionID string
 }
 ~~~
 
@@ -2533,18 +2326,14 @@ type TaskInvocation struct {
 ~~~go
 func TriggerInit(appJSONPath string) error
 
-func EventTriggerNotify(
-    event DataReadyEvent,
-    sourceFuncName FunctionIdentity,
-    dataAddr unsafe.Pointer,
-) error
+func EventTriggerNotify(event DataReadyEvent, source FunctionIdentity) error
 ~~~
 
 用户根据附录 B 自行编写 app.json。全部初始化成功结束后才允许发送通知，禁止初始化与通知并发；初始化未完成返回 ErrNotInitialized。完整状态规则见第三部分 §11.6。
 
 TriggerInit 只接收 app.json 路径。模块自行读取 app.json，并解析内嵌 functions[]。
 
-EventTriggerNotify 的 DataReadyEvent 只包含 Bucket、Key、SessionID。sourceFuncName、dataAddr 是独立参数。外部 SMC Actor 传 FunctionIdentity{}。
+EventTriggerNotify 的事件携带 AppName、Bucket、Key、SessionID 和 DataAddr，来源标识为第二个参数。外部 Actor 使用零值。
 
 ## C.3 POOL-API-001：TryEnqueue 下游接口
 
@@ -2566,13 +2355,13 @@ type TaskPool interface {
 - 首次提交和每次延时重试必须先做 CPU / Memory 检查；不足或探测 / 计算失败不调用 Pool，记录原因日志后按 scheduler.delay_queue.enabled 暂存重试或终止；固定首次可延时原因的 deadline，提交前不得到期。
 - 不带 ctx 参数；Pool 实例自身持有队列和运行状态。
 - 不提供 register_function、unregister_function、register_function_configs 或 wake_one。
-- TaskInvocation 携带完整 FunctionInfo（SOName、FuncName、Resource），不需要 Pool 启动阶段静态注册。
+- TaskInvocation 包含 AppName、FuncName、SOName、DataAddr、SessionID。
 
 ## C.4 TryEnqueue 接收语义
 
 - TryEnqueue 原子完成容量判断和入队；不等待容量恢复或任务执行完成，不在调用栈内同步执行函数。
-- Accepted：Pool 接收任务，必须复制 TaskInvocation 的 Args 切片及后续需要独立持有的描述符；Go string 可共享其不可变内容。
-- NoCapacity：Pool 不接管任务，返回后不得继续引用调用方可变 Args 切片。
+- Accepted：Pool 接收按值传递的请求。
+- NoCapacity：Pool 未接收任务，可以按延时配置重试。
 - Error：Pool 不接管任务。
 - Pool 不复制、不释放 DataAddr 指向的数据。
 - Pool 内部负责队列消费、协程等待和唤醒；本模块不调用独立唤醒接口。
@@ -2581,16 +2370,14 @@ type TaskPool interface {
 
 ~~~go
 type TaskContext struct {
-    SOName    string
-    FuncName  string
-    InputMode InputMode
-    Args      []TaskArgument
+    Source    FunctionIdentity
+    SessionID string
 }
 ~~~
 
 TaskContext 是 Pool 与 Function / Object SDK 的逻辑执行上下文，不是本模块的第三个上游 API。Pool 应确保当前任务的 SOName 和 FuncName 能被 Object SDK 读取。
 
-Function 通过 Object API 写入输出数据。Object SDK 从 TaskContext 的 SOName 和 FuncName 构造 EventTriggerNotify 的 sourceFuncName。外部 SMC Actor 传 FunctionIdentity{}。
+Function 通过 Object API 写入输出数据。Object SDK 从 TaskContext 的 AppName、SOName 和 FuncName 构造 EventTriggerNotify 的 source。外部 SMC Actor 传 FunctionIdentity{}。
 
 本模块不规定 Function 是 Go Plugin、cgo/native SO 还是其他执行载体；实际加载与调用 ABI 由下游 Pool 负责。
 
@@ -2603,9 +2390,9 @@ Function 通过 Object API 写入输出数据。Object SDK 从 TaskContext 的 S
 | 对象 | 创建方 | 使用方 | 所有权 / 有效期 |
 |---|---|---|---|
 | DataReadyEvent | 上游 SDK | EventTriggerNotify | 上游保证调用期间有效 |
-| sourceFuncName | 上游 SDK / TaskContext | DIRECT 匹配 | 上游保证调用期间有效 |
+| source | 上游 SDK / TaskContext | DIRECT 匹配 | 上游保证调用期间有效 |
 | Bucket / Key / SessionID 字符串 | 上游 SDK | Task Builder / Pool / Function | Task Builder 复制异步任务所需字符串 |
-| TaskInvocation / Args | Task Builder | Router / Pool | Router 或 Pool 管理自己的描述符副本 |
+| TaskInvocation | Task Builder | Router / Pool | Router 或 Pool 管理自己的描述符副本 |
 | DataAddr 指向的数据 | 上游 Data SDK | Task Builder / Pool / Function | Data SDK 自行判定完成并回收；本模块不提供完成判定契约 |
 
 不可违反的规则：
@@ -2627,88 +2414,35 @@ Function 通过 Object API 写入输出数据。Object SDK 从 TaskContext 的 S
 ## D.1 核心对象关系
 
 ~~~mermaid
-classDiagram
-    class AppRecord {
-      app_name
-      FunctionIndex
-      BucketIndex
-      DirectDependencyIndex
-      TriggerIndex
-      DelayQueueConfig
-    }
-    class FunctionInfo {
-      so_name
-      func_name
-      Resource
-    }
-    class DataReadyEvent {
-      bucket
-      key
-      session_id
-    }
-    class TaskArgument {
-      bucket
-      session_id
-      key
-      data_addr
-    }
-    class TaskInvocation {
-      FunctionInfo
-      InputMode
-      Args
-    }
-    AppRecord --> FunctionInfo
-    AppRecord --> DataReadyEvent
-    DataReadyEvent --> TaskInvocation
-    FunctionInfo --> TaskInvocation
-    TaskInvocation --> TaskArgument
+flowchart TD
+    Event["批数据就绪事件"] --> Lookup["按 App 查找 DIRECT 或 Bucket 规则"]
+    Lookup --> Router["Router 使用目标函数资源配置"]
+    Router --> Pool["Pool 接收五字段执行请求"]
 ~~~
-
-DataReadyEvent 是上游借用视图；TaskInvocation 是提交给 Pool 的最小执行描述。TaskAction、RouterPendingTask 是内部对象，不属于上游 API。
 
 ## D.2 DataReadyEvent 与通知参数
 
-DataReadyEvent 只有三个字段：
-
-| 字段 | 必须 | 说明 |
-|---|---|---|
-| Bucket | 是 | 全局唯一 Bucket |
-| Key | 是 | 本次提交对象 Key |
-| SessionID | 是 | 业务 Session |
-
-EventTriggerNotify 独立接收 sourceFuncName、dataAddr。外部 Actor 传 FunctionIdentity{}。
-
-不传 AppName、EventID、Trigger 配置、目标函数、PayloadType、DataRef、IP 或 RPC 地址。
+AppName、Bucket、Key 共同标识批数据，SessionID 标识会话，DataAddr 指向当前提交的批次。第二个参数标识来源函数，外部 Actor 使用零值。
 
 ## D.3 TaskInvocation 最小字段
 
-| 字段 | 必须 | 说明 |
-|---|---|---|
-| SessionID | 是 | 业务 Session |
-| Function.SOName | 是 | 下游识别的 SO 文件名 |
-| Function.FuncName | 是 | 目标函数标识 |
-| Function.Resource | 是 | 完整 CPU / Memory / GPU / Disk / Network 静态资源需求；Router 必查 CPU / Memory，按需检查 GPU / Disk / Network |
-| InputMode | 是 | InputValue / InputKeyValue / InputKeyOnly |
-| Args | 是 | 参数数组；长度为 1 |
+| 字段 | 说明 |
+|---|---|
+| AppName | 目标函数所属 App |
+| FuncName | 目标函数名 |
+| SOName | 目标共享库名 |
+| DataAddr | 本次提交的批数据入口 |
+| SessionID | 业务会话 |
 
-每个 TaskArgument 包含必填 Bucket、SessionID、Key 和 DataAddr。DataAddr 必须非空。
+## D.4 批数据入口生命周期
 
-## D.4 输入模式
-
-| 路径 | 输入模式 | Function 输入语义 |
-|---|---|---|
-| DIRECT | 由依赖项 trigger_option 选择；缺省 InputValue | Value / Key + Value / Key Only |
-| Trigger option 0 | InputValue | Value |
-| Trigger option 1 | InputKeyValue | Key + Value |
-| Trigger option 2 | InputKeyOnly | Key Only |
-
-Key 在 TaskArgument 中始终必填。InputMode 只决定 Function 输入视图，不决定数据载体。
+SDK 负责批数据入口和其引用内容的布局及生命周期。同一 app_name、bucket、key 可在业务允许时产生后续批次，前一批尚在重试、队列或执行中时，SDK 须保持其地址和内容有效。
 
 ## D.5 数据地址所有权
 
 1. 上游 Data SDK 在 Session 生命周期内持有数据内存。
 2. EventTriggerNotify 只借用 dataAddr，不复制、不释放。
-3. Task Builder 为每个目标构建独立 TaskArgument 描述符，但共享同一 dataAddr。
+3. Task Builder 为每个目标构建独立 TaskInvocation，共享同一批数据地址。
 4. Router 在 Delay Queue 中保留 TaskInvocation 元数据副本，不拥有数据内存。
 5. Pool Accepted 后接收任务描述符副本，不接管 dataAddr 所有权。
 6. Pool / Router 均不得 free、munmap 或释放 dataAddr。
@@ -2717,11 +2451,11 @@ Key 在 TaskArgument 中始终必填。InputMode 只决定 Function 输入视图
 
 ## D.6 DIRECT 与 Trigger 路径
 
-- sourceFuncName 有 DIRECT targets：构建 DIRECT Task，跳过 Bucket Trigger。
-- sourceFuncName 为零值或无 DIRECT targets：执行 Bucket Trigger 匹配。
+- source 有 DIRECT targets：构建 DIRECT Task，跳过 Bucket Trigger。
+- source 为零值或无 DIRECT targets：执行 Bucket Trigger 匹配。
 - 一个 DIRECT source 对应多个 target 时，每个 target 生成独立 Task。
 - 一个 Bucket 多条 Trigger 命中时，每条规则生成独立 Task，不去重。
-- DIRECT 读取依赖项的 trigger_option，Bucket Trigger 读取各自的 trigger_option。二者均缺省为 InputValue。
+- DIRECT 和 Bucket Trigger 都使用本次提交的批数据入口。
 
 ## D.7 Pool 返回值与 Router 行为
 
@@ -2757,7 +2491,6 @@ Delay Queue 为进程级全局配置。多个 App 声明的配置必须完全相
 
 ## 附录 E：Mock 端到端测试与独立验收
 
-
 ## E.1 目的与验收边界
 
 上下游模块并行开发期间，通过可控测试替身运行真实调度模块，独立验证从 app.json 初始化、事件通知、规则匹配、Task 构建、资源检查、延时重试到测试函数最终输出的完整链路。
@@ -2777,7 +2510,7 @@ A、B 不等待真实 SDK 或 Pool 完工；C 单独记录为待联调，不阻�
 | 组件 | 采用方式 | 测试职责 |
 |---|---|---|
 | app.json / TriggerInit | 真实文件、真实 API | 文件读取、解析、字段和引用校验、初始化状态 |
-| Registry / DIRECT / Trigger | 真实实现 | App 隔离、优先级、多目标与输入模式 |
+| Registry / DIRECT / Trigger | 真实实现 | App 隔离、优先级、多目标与批地址透传 |
 | Task Builder / Router / Delay Queue | 真实实现 | 描述符组装、资源判断、Pool 返回分支、重试和超时 |
 | Mock SDK / 事件发生器 | 测试代码 | 分配并保持数据，模拟 Commit 完成后调用真实通知 API；接收测试函数输出并通知下一步 |
 | Fake Pool | 实现同一 TaskPool 契约 | 按脚本返回 Accepted / NoCapacity / Error；复制接收描述符、异步消费和分发测试函数 |
@@ -2798,18 +2531,18 @@ Mock 与被测模块引用同一份生产类型及接口定义，编译时检查
 ## E.3 Mock SDK 与数据内存
 
 1. 基础链路夹具使用 Linux mmap 分配的稳定内存，保存输入数据与长度，完成写入后才通知。不得把未固定 Go Heap 指针作为异步借用数据地址。
-2. 测试函数通过测试用 Object SDK 辅助层写出新对象；写入完成后调用真实 EventTriggerNotify。来源标识从当前执行任务的 SOName 和 FuncName 注入，外部 Actor 传 FunctionIdentity{}。
-3. 同一 Session / Bucket / Key 的测试对象写入后保持不可变；使用不同 Key 表示新对象，不通过覆盖旧对象制造生命周期歧义。
+2. 测试函数通过测试用 Object SDK 辅助层写出新对象；写入完成后调用真实 EventTriggerNotify。来源标识从当前执行任务的 AppName、SOName 和 FuncName 注入，外部 Actor 传 FunctionIdentity{}。
+3. 同一 App / Session / Bucket / Key 的测试对象写入后保持不可变；使用不同 Key 表示新对象，不通过覆盖旧对象制造生命周期歧义。
 4. 夹具持有全部测试映射，直到事件发生器停止、在途通知退出、内部延时项结束且 Fake Pool 消费退出，才统一解除映射；断言前后字节内容和地址一致性。
 5. 此处等待和清理仅用于测试夹具管理内存，不要求调度模块实现 Session 完成判定或生产回收协议。SDK 内部回收由 SDK 团队负责。
-6. Value / Key+Value / Key Only 分别检查逻辑输入语义。TaskArgument 仍携带必填 Key 和原始地址；Key Only 测试函数不得解引用 Value。
+6. 检查批数据入口和会话在入队、消费和重试时保持一致。
 
 ## E.4 Fake Pool 契约与自检
 
 Fake Pool 使用带锁的有界队列，容量判断和入队在同一临界区内完成。用例可以按目标函数及第几次提交配置返回序列，避免并发线程先后顺序影响脚本归属。
 
-- Accepted：返回前复制 TaskInvocation 的 Args 切片及需要独立持有的元数据；只借用 DataAddr，不复制、不释放业务数据。为 Accepted 任务分配测试内部记录号，记录接收与消费次数。
-- NoCapacity / Error：不入队、不执行、不保存调用方可变 Args 切片；测试日志可保存独立字段副本作为诊断证据。
+- Accepted：Pool 持有入队请求值，借用批数据地址。
+- NoCapacity / Error：未接收任务。
 - TryEnqueue 只做接收，不在调用栈内同步执行测试函数。独立 worker 通过队列和同步屏障异步执行；用例可以延迟消费以验证异步边界。
 - 测试分发表以 SOName + FuncName 定位 Go 测试函数；这只是 Fake Pool 机制，不是本模块静态 Function 注册 API，不约定真实 SO 加载方式。
 - 测试函数输出经 Mock SDK 回到真实 EventTriggerNotify；不得由 Fake Pool 直接调用 Trigger 或绕过通知。
@@ -2833,11 +2566,11 @@ Fake Pool 的容量和复制自检只证明替身可用，不能用来验收真�
 
 | 用例 | 场景 / 故障注入 | 必须断言 | 需求 / 既有检查 |
 |---|---|---|---|
-| MOCK-E2E-01 | 合法 app.json → Immediate → 异步测试函数 → 最终结果 | 配置真实读取，目标、输入模式、Args、输出字节正确，成功接收和执行各一次 | APP、EVT、TSK、API |
+| MOCK-E2E-01 | 合法 app.json → Immediate → 异步测试函数 → 最终结果 | 配置真实读取，目标、会话、批数据地址、输出字节正确，成功接收和执行各一次 | APP、EVT、TSK、API |
 | MOCK-E2E-02 | ByName 精确命中及非命中 | 匹配 Key 才生成任务，非命中无 Pool 调用 | EVT-04 |
 | MOCK-E2E-03 | A 写出对象，SDK 注入来源，DIRECT 触发 B；同 Bucket 另有 Trigger | B 由 DIRECT 触发，该次事件不额外走 Bucket Trigger；最终输出正确 | DIR-02–05、EVT-06 |
 | MOCK-E2E-04 | 同事件多 Trigger / DIRECT 多目标，分别测试 | 目标集合和独立描述符正确，共享原地址；每个合法命中分别接收 | DIR-03、EVT-05、TSK-05 |
-| MOCK-E2E-05 | Value、Key+Value、Key Only 参数化流水线 | 输入模式和 Key 符合配置；Key Only 不读 Value；Args 长度为 1 | TSK-01–03 |
+| MOCK-E2E-05 | DIRECT 批数据流水线 | 多目标共享批地址，执行读取实际数据 | TSK-01–03 |
 | MOCK-E2E-06 | CPU / Memory 不足，分别 enabled=true / false | 首次不调用 Pool；开启则等待，恢复后执行，关闭则日志并终止 | TEST-RTE-02–03、22 |
 | MOCK-E2E-07 | 资源文件读取 / 解析失败，分别 enabled=true / false | 不使用异常值放行，日志 reason 正确；开启恢复后执行，关闭终止 | TEST-RTE-06、12、23 |
 | MOCK-E2E-08 | 零采样窗口、计数回退等计算失败，分别 enabled=true / false | 与探测失败区分原因；开启则重新计算后执行，关闭则终止 | TEST-RTE-18、21、23 |
@@ -2847,7 +2580,7 @@ Fake Pool 的容量和复制自检只证明替身可用，不能用来验收真�
 | MOCK-E2E-12 | 重试和 deadline 同时到达；检查开始前未超时、返回后已超时 | 到期优先，资源检查完成后也不得晚提交 | TEST-RTE-16、26 |
 | MOCK-E2E-13 | 一个目标 Accepted，另一个延时后恢复 / 到期 | 已接收目标不重试；失败不阻断其他目标；最终集合准确 | TEST-RTE-27 |
 | MOCK-E2E-14 | Pool Error、延时队列满、重复唤醒 | Error 不重试，满队列拒绝有日志，重复唤醒不重复接收 / 执行 | TEST-RTE-10、25 |
-| MOCK-E2E-15 | 延迟消费并在通知返回后释放调用方元数据引用 | Key / SessionID / FunctionInfo / Args 保持正确，借用地址未被改写或释放 | TEST-TSK-07–08、API-05 |
+| MOCK-E2E-15 | 延迟消费并在通知返回后释放调用方元数据引用 | AppName / SessionID / DataAddr 保持正确，借用地址未被改写或释放 | TEST-TSK-07–08、API-05 |
 | MOCK-E2E-16 | 多事件并发、多目标展开和输出回流 | 预期任务和最终结果集合一致，无额外接收、无数据竞争 | EVT-05、TSK-05、RTE-07 |
 | MOCK-E2E-17 | 未初始化、非法事件、非法 app.json（含数值溢出 / 多 App 延时配置冲突）、Running 再初始化 | 错误语义正确，不产生意外任务；初始化失败无部分发布 | TEST-APP、TEST-API-12–15 |
 | MOCK-E2E-18 | 停止事件源，存在延时项及已 Accepted 任务时退出 | 内部关闭流程结束，worker / timer / pending 无残留；只清理自有元数据 | 04 §14.6、API-05 |
@@ -2938,7 +2671,7 @@ SDK 与 Pool 接口版本对齐后，在真实环境验证 Commit 通知、异�
 
 ## 2. 跟踪应用配置如何注册
 
-打开端到端测试的 `app.json`，先找 `functions`、`buckets`、`dependencies` 和 `triggers`。再沿 `Runtime.Init → config.Parse → Runtime.publish` 读代码。JSON 字段和引用校验先在临时配置中完成，跨应用冲突检查全部通过后才更新运行时索引。重点看数据桶名称如何跨应用保持唯一，以及为什么所有应用都要在首条有效通知之前注册。 [测试配置](../tests/mocke2e/testdata/app.json) · [配置解析](../internal/config/config.go) · [JSON 校验](../internal/config/json.go) · [运行时初始化](../internal/engine/engine.go) · [设计第 5 章](#part-2)
+打开端到端测试的 `app.json`，先找 `app_name`、`functions`、`dependencies` 和 `triggers`。再沿 `Runtime.Init → config.Parse → Runtime.publish` 读代码。JSON 字段和引用校验先在临时配置中完成，跨应用冲突检查全部通过后才更新运行时索引。重点看同名 Bucket 的规则如何按 App 隔离，以及为什么所有应用都要在首条有效通知之前注册。 [测试配置](../tests/mocke2e/testdata/app.json) · [配置解析](../internal/config/config.go) · [JSON 校验](../internal/config/json.go) · [运行时初始化](../internal/engine/engine.go) · [设计第 5 章](#part-2)
 
 ## 3. 跟踪一条通知如何生成任务
 
@@ -2947,7 +2680,7 @@ SDK 与 Pool 接口版本对齐后，在真实环境验证 Commit 通知、异�
 1. 向 `input` 发送数据。它匹配 `IMMEDIATE` 规则，生成函数 `A` 的任务。
 2. `A` 提交 `output` 数据时，来源函数标识命中 `A → B` 的 `DIRECT` 依赖，因此生成 `B` 的任务并跳过 `output` 上触发 `C` 的规则。也可以用 `named` 数据桶对照 `BY_NAME`，它只匹配键 `ready`。
 
-随后检查任务的 `Function`、`InputMode` 和单项 `Args`。每个命中项有独立的任务描述，`DataAddr` 指向的数据由上游 SDK 保持有效，直至相关任务结束。 [事件处理](../internal/engine/engine.go) · [端到端用例中的 pipeline 与 byName](../tests/mocke2e/scenarios_test.go) · [设计第 6–8 章](#part-2)
+随后检查任务的 AppName、FuncName、SOName、DataAddr 和 SessionID。每个命中项独立提交，批数据地址由 SDK 管理。 [事件处理](../internal/engine/engine.go) · [端到端测试](../tests/mocke2e/scenarios_test.go)
 
 ## 4. 跟踪入队、重试和关闭
 

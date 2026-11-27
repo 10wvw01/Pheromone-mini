@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
-
-	"triggerEngine/internal/contract"
 )
 
 const (
@@ -18,8 +16,11 @@ const (
 	maxStringBytes = 4096
 )
 
-// functionRef accepts a full identity or a legacy unqualified function name.
-type functionRef contract.FunctionIdentity
+// functionRef accepts a library/function pair or an unambiguous function name within the App.
+type functionRef struct {
+	SOName   string `json:"so_name"`
+	FuncName string `json:"func_name"`
+}
 
 func (ref *functionRef) UnmarshalJSON(data []byte) error {
 	if data[0] == '"' {
@@ -30,7 +31,8 @@ func (ref *functionRef) UnmarshalJSON(data []byte) error {
 		*ref = functionRef{FuncName: name}
 		return nil
 	}
-	var id contract.FunctionIdentity
+	type referenceFields functionRef
+	var id referenceFields
 	if err := json.Unmarshal(data, &id); err != nil {
 		return err
 	}

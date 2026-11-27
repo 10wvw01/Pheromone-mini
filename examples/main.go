@@ -7,6 +7,9 @@ import (
 	"unsafe"
 
 	"triggerEngine/api"
+	"triggerEngine/internal/engine"
+	"triggerEngine/internal/wiring"
+	"triggerEngine/mockpool"
 )
 
 type step struct {
@@ -21,7 +24,15 @@ func main() {
 	}
 }
 
-func runScenario(pool taskConsumer) error {
+func run() error {
+	// 本地演示用临时 Pool。Router 自行探测资源并决定是否入队。
+	pool := mockpool.New(4)
+	scheduler := engine.New(engine.Dependencies{Pool: pool})
+	defer scheduler.Close()
+	if err := wiring.Install(scheduler); err != nil {
+		return err
+	}
+
 	if err := initialize("examples/app.json", "examples/app-score.json", "examples/app-report.json"); err != nil {
 		return err
 	}
@@ -81,7 +92,7 @@ func runScenario(pool taskConsumer) error {
 	return nil
 }
 
-func runChain(pool taskConsumer, sdk demoSDK, key batchKey, input []int, steps []step, want []int) error {
+func runChain(pool *mockpool.Pool, sdk demoSDK, key batchKey, input []int, steps []step, want []int) error {
 	// 跨 App 链的入口由 Actor 提交本地批次，来源函数标识为空。
 	if err := sdk.commit(key, session, input, api.FunctionIdentity{}); err != nil {
 		return err
@@ -102,9 +113,7 @@ func runChain(pool taskConsumer, sdk demoSDK, key batchKey, input []int, steps [
 		if err != nil {
 			return err
 		}
-		// 模拟 Pool 提供当前执行上下文，SDK 用它标识产出函数。
-		source := api.FunctionIdentity{AppName: task.AppName, SOName: task.SOName, FuncName: task.FuncName}
-		if err := sdk.commit(step.output, task.SessionID, output, source); err != nil {
+		if err := sendObject(sdk, task, step.output, output); err != nil {
 			return err
 		}
 		key = step.output
@@ -121,6 +130,12 @@ func runChain(pool taskConsumer, sdk demoSDK, key batchKey, input []int, steps [
 	}
 	fmt.Printf("%s/%s/%s = %v\n", key.app, key.bucket, key.key, got)
 	return nil
+}
+
+// sendObject 模拟任务通过 send_object 把产出的整批数据交给 Data SDK。
+func sendObject(sdk demoSDK, task api.TaskInvocation, key batchKey, data []int) error {
+	source := api.FunctionIdentity{AppName: task.AppName, SOName: task.SOName, FuncName: task.FuncName}
+	return sdk.commit(key, task.SessionID, data, source)
 }
 
 func mapValues(transform func(int) int) func(api.TaskInvocation, []int) ([]int, error) {

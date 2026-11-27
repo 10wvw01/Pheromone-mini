@@ -10,7 +10,7 @@ import (
 
 var instance atomic.Pointer[engine.Runtime]
 
-// Install 按 V0.6 §11.1 注册集成方组装的运行时。应在首次调用公共接口前完成注册。
+// Install 为内部测试安装替身运行时。须在首次公共 API 调用前执行。
 func Install(r *engine.Runtime) error {
 	if r == nil || !instance.CompareAndSwap(nil, r) {
 		return errors.New("scheduler runtime already initialized or missing")

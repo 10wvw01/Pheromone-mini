@@ -7,8 +7,6 @@ import (
 	"unsafe"
 
 	"triggerEngine/api"
-	"triggerEngine/internal/engine"
-	"triggerEngine/internal/wiring"
 	"triggerEngine/mockpool"
 )
 
@@ -25,14 +23,6 @@ func main() {
 }
 
 func run() error {
-	// 创建供示例运行使用的临时 Pool。
-	pool := mockpool.New(4)
-	scheduler := engine.New(engine.Dependencies{Pool: pool})
-	defer scheduler.Close()
-	if err := wiring.Install(scheduler); err != nil {
-		return err
-	}
-
 	if err := initialize("examples/app.json", "examples/app-score.json", "examples/app-report.json"); err != nil {
 		return err
 	}
@@ -43,7 +33,7 @@ func run() error {
 	if err := sdk.commit(batchKey{"ingest", "normalized", "Ready"}, session, []int{999}, actor); err != nil {
 		return err
 	}
-	if unexpected, ok := pool.TryDequeue(); ok {
+	if unexpected, ok := mockpool.TryDequeue(); ok {
 		return fmt.Errorf("unexpected task for nonmatching key: %+v", unexpected)
 	}
 
@@ -52,7 +42,7 @@ func run() error {
 	reportResult := batchKey{"report", "result", "ready"}
 
 	// App 1：IMMEDIATE → BY_NAME → DIRECT → BY_NAME，产生供其他 App 读取的数据。
-	if err := runChain(pool, sdk, batchKey{"ingest", "input", "ready"}, []int{1, 2, 3}, []step{
+	if err := runChain(sdk, batchKey{"ingest", "input", "ready"}, []int{1, 2, 3}, []step{
 		{"normalize", batchKey{"ingest", "normalized", "ready"}, mapValues(func(n int) int { return n * 2 })},
 		{"validate", batchKey{"ingest", "validated", "ready"}, mapValues(func(n int) int { return n + 1 })},
 		{"enrich", batchKey{"ingest", "enriched", "ready"}, mapValues(func(n int) int { return n * 10 })},
@@ -63,7 +53,7 @@ func run() error {
 
 	// App 2：外部 Actor 在 ingest 完成后提交本 App 的权重。
 	// load 从 SDK 显式读取 ingest/result/ready，再和本地权重相乘。
-	if err := runChain(pool, sdk, batchKey{"score", "input", "ready"}, []int{2, 3, 4}, []step{
+	if err := runChain(sdk, batchKey{"score", "input", "ready"}, []int{2, 3, 4}, []step{
 		{"load", batchKey{"score", "loaded", "ready"}, combine(sdk, ingestResult, func(a, b int) int { return a * b })},
 		{"weight", batchKey{"score", "weighted", "ready"}, mapValues(func(n int) int { return n + 5 })},
 		{"publish", scoreResult, mapValues(func(n int) int { return n })},
@@ -80,7 +70,7 @@ func run() error {
 		}
 		return combine(sdk, scoreResult, add)(task, total)
 	}
-	if err := runChain(pool, sdk, batchKey{"report", "input", "ready"}, []int{1, 1, 1}, []step{
+	if err := runChain(sdk, batchKey{"report", "input", "ready"}, []int{1, 1, 1}, []step{
 		{"join", batchKey{"report", "joined", "ready"}, join},
 		{"summarize", batchKey{"report", "summary", "ready"}, mapValues(func(n int) int { return n })},
 		{"publish", reportResult, mapValues(func(n int) int { return n })},
@@ -92,13 +82,13 @@ func run() error {
 	return nil
 }
 
-func runChain(pool *mockpool.Pool, sdk demoSDK, key batchKey, input []int, steps []step, want []int) error {
+func runChain(sdk demoSDK, key batchKey, input []int, steps []step, want []int) error {
 	// 跨 App 链的入口由 Actor 提交本地批次，来源函数标识为空。
 	if err := sdk.commit(key, session, input, api.FunctionIdentity{}); err != nil {
 		return err
 	}
 	for _, step := range steps {
-		task, ok := pool.TryDequeue()
+		task, ok := mockpool.TryDequeue()
 		expected := api.TaskInvocation{
 			AppName: key.app, FuncName: step.function, SOName: step.function + ".so",
 			SessionID: session, DataAddr: unsafe.Pointer(sdk[key].batch),
@@ -118,7 +108,7 @@ func runChain(pool *mockpool.Pool, sdk demoSDK, key batchKey, input []int, steps
 		}
 		key = step.output
 	}
-	if unexpected, ok := pool.TryDequeue(); ok {
+	if unexpected, ok := mockpool.TryDequeue(); ok {
 		return fmt.Errorf("%s: unexpected extra task: %+v", key.app, unexpected)
 	}
 	got, err := sdk.read(key, session)

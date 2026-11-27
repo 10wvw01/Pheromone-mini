@@ -20,6 +20,7 @@ import (
 	"triggerEngine/internal/contract"
 	"triggerEngine/internal/engine"
 	"triggerEngine/internal/resource"
+	"triggerEngine/mockpool"
 	"triggerEngine/tests/testclock"
 )
 
@@ -491,4 +492,37 @@ func TestDirectBatchRetryWithoutBucketTrigger(t *testing.T) {
 			t.Fatalf("batch retry lost the original address or data: attempts=%+v consumed=%v", attempts, consumed)
 		}
 	})
+}
+
+func TestDefaultPoolSharesQueueAcrossApps(t *testing.T) {
+	r := engine.New(engine.Dependencies{
+		Probe: probeFunc(func(context.Context, config.Domain, contract.FunctionInfo) (resource.Snapshot, error) {
+			return resource.Snapshot{CPUAvailable: 8, MemoryAvailable: 1 << 30}, nil
+		}),
+	})
+	defer r.Close()
+	defer func() {
+		for {
+			if _, ok := mockpool.TryDequeue(); !ok {
+				return
+			}
+		}
+	}()
+	assertCode(t, r.Init(samplePath), 0)
+	assertCode(t, r.Init(writeConfig(t, strings.ReplaceAll(string(mustReadConfig(t)), "smc_demo", "other"))), 0)
+	addr := unsafe.Pointer(new(byte))
+	apps := []string{"smc_demo", "other"}
+	for _, app := range apps {
+		event := contract.DataReadyEvent{AppName: app, Bucket: "b_input", Key: "ready", SessionID: "session", DataAddr: addr}
+		assertCode(t, r.Notify(event, contract.FunctionIdentity{}), 0)
+	}
+	for _, app := range apps {
+		want := contract.TaskInvocation{AppName: app, SOName: "producer.so", FuncName: "producer", SessionID: "session", DataAddr: addr}
+		if got, ok := mockpool.TryDequeue(); !ok || got != want {
+			t.Fatalf("shared queue: got %+v (present=%v), want %+v", got, ok, want)
+		}
+	}
+	if extra, ok := mockpool.TryDequeue(); ok {
+		t.Fatalf("unexpected queued task: %+v", extra)
+	}
 }

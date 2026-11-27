@@ -169,7 +169,7 @@ Pool 根据 app_name、so_name 和 func_name 识别执行目标；具体采用 G
 - Session 结束且相关任务全部完成或终止后，由上游 Data SDK 回收数据。
 - 如果一个事件命中多个 DIRECT 目标或多条 Trigger，所有任务使用同一事件数据地址；上游必须等待全部相关任务结束后再回收。
 
-数据有效性、Session 任务完成判定及回收均由 Data SDK 管控。本模块不新增完成判定、任务计数或回收契约；不将 SDK 内部机制列为本模块冻结前提。Pool 实例创建和装配同样不在本模块职责内，仅按接口调用。
+数据有效性、Session 任务完成判定及回收均由 Data SDK 管控。本模块不新增完成判定、任务计数或回收契约；不将 SDK 内部机制列为本模块冻结前提。进程内唯一 Pool 由下游创建与管理，Router 按接口调用。
 
 ## 资源准入与 Delay Queue
 
@@ -925,7 +925,12 @@ type TaskPool interface {
 
 该接口不带 ctx 参数。Go 方法接收者 / Pool 实例自身持有队列、协程池和运行状态；不需要额外 ctx。
 
-Pool 实例创建、装配和生命周期由下游 / 集成方负责，不属于本模块设计或验收范围。本模块仅按 POOL-API-001 调用下游 API，不新增 SetPool、RegisterPool 或第三个上游 API。
+单进程内由下游管理唯一的 Pool，所有已注册 App 共用该实例。Router 通过 `internal/engine/pool.go` 的下游适配调用唯一的 `TryEnqueue` 入口。当前该入口绑定根目录 `mockpool`，真实 Pool 接入时替换这里的绑定。App 注册与 Pool 就绪各自管理。
+
+- Mock Pool 随包初始化就绪，队列随进程退出释放。示例通过 `TryDequeue` 模拟下游消费。
+- 真实 Pool 如需显式启动，由下游或宿主在开放业务通知前完成。未启动或已关闭时返回 `EnqueueError`，Router 记录并终止该次派发。暂时队列满返回 `EnqueueNoCapacity`，Router 按延时配置处理。
+- 宿主退出时先停止事件来源，再停止 Trigger 的待重试任务，最后由下游排空并关闭 Pool。SDK 保持批数据有效至相关任务完成或终止。
+- 内部测试可使用独立运行时和 Pool 替身测试容量、错误和重试。上游继续使用两个公共 API。
 
 #### 10.7.2 TryEnqueue 调用语义
 
@@ -2667,7 +2672,7 @@ SDK 与 Pool 接口版本对齐后，在真实环境验证 Commit 通知、异�
 
 ## 1. 从两个公共入口开始
 
-先看 `TriggerInit` 和 `EventTriggerNotify`。前者在启动时注册应用，后者在 SDK 成功提交数据后接收通知。接着看 `DataReadyEvent`、`TaskInvocation` 和 `TaskPool.TryEnqueue`，确认通知携带哪些字段，以及任务池最终接收什么。最后看 `wiring.Install` 和 `engine.New`，找到任务池、资源采集器和时钟的装配位置。 [公共 API](../api/api.go) · [公共类型](../internal/contract/types.go) · [运行时装配](../internal/wiring/wiring.go) · [接口设计第 10–11 章](#part-3)
+先看 `TriggerInit` 和 `EventTriggerNotify`。前者在启动时注册应用，后者在 SDK 成功提交数据后接收通知。接着看 `DataReadyEvent`、`TaskInvocation` 和 `TaskPool.TryEnqueue`，确认通知携带哪些字段，以及任务池最终接收什么。随后看 `engine.New` 的默认依赖和 `internal/engine/pool.go` 的唯一 Pool 调用点。 [公共 API](../api/api.go) · [公共类型](../internal/contract/types.go) · [运行时装配](../internal/wiring/wiring.go) · [接口设计第 10–11 章](#part-3)
 
 ## 2. 跟踪应用配置如何注册
 

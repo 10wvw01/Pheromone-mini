@@ -122,10 +122,6 @@ func (r *router) attempt(p *pendingTask) bool {
 			"disk_available", s.DiskAvailable, "network_available", s.NetworkAvailable,
 			"sample_time", s.SampleTime, "source", s.Source, "resource_request", p.function.Resource)
 	}
-	if r.pool == nil {
-		p.log.Error("POOL_ERROR", "reason", "Pool is not assembled", "delay_state", "terminated")
-		return false
-	}
 	if r.stopAttempt(p) {
 		return false
 	}

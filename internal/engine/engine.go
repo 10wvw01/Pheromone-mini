@@ -39,7 +39,7 @@ type Runtime struct {
 	router     *router
 }
 
-// Dependencies 由集成方提供任务池等依赖，也支持附录 E §E.2 所列的测试替换。
+// Dependencies 支持内部配置与测试替换。Pool 省略时使用进程级下游。
 type Dependencies struct {
 	Pool       contract.TaskPool
 	Probe      resource.Probe
@@ -52,7 +52,10 @@ type Dependencies struct {
 
 // New 按 V0.6 §4.3 组装运行时，建立应用索引和进程级调度器。
 func New(d Dependencies) *Runtime {
-	// 为省略的依赖使用默认实现，保留集成方显式传入的设置。
+	// 为省略的依赖使用默认实现。
+	if d.Pool == nil {
+		d.Pool = downstreamPool{}
+	}
 	if d.Clock == nil {
 		d.Clock = timing.System{}
 	}

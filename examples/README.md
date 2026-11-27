@@ -27,7 +27,7 @@ go run ./examples
 | 接口 | 调用方和时机 | 入参 | 返回值 |
 |---|---|---|---|
 | `api.TriggerInit(appJSONPath string) error` | 集成方在启动期调用，每份配置调用一次 | 单个 App 的 JSON 文件路径 | 成功返回 `nil`。读取失败或配置非法时返回 `*api.APIError`。首条有效通知之后再初始化会返回 `ErrInvalidState` |
-| `api.EventTriggerNotify(event api.DataReadyEvent, source api.FunctionIdentity) error` | Data SDK 在整批数据提交并可读后调用 | 五字段事件和产出函数标识 | 参数无效或调度器尚未就绪时返回 `*api.APIError`。返回 `nil` 表示通知已按规则处理，可能无任务命中，也可能有任务等待入队 |
+| `api.EventTriggerNotify(event api.DataReadyEvent, sourceFunction api.FunctionIdentity) error` | Data SDK 在整批数据提交并可读后调用 | 五字段事件和产出函数标识 | 参数无效或调度器尚未就绪时返回 `*api.APIError`。返回 `nil` 表示通知已按规则处理，可能无任务命中，也可能有任务等待入队 |
 
 | 事件字段 | SDK 填写方式 |
 |---|---|

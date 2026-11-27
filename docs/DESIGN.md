@@ -88,7 +88,7 @@ flowchart TD
     D --> E["JSON 校验 / Registry 与索引构建"]
     E --> F["初始化成功，开放事件通知"]
     F --> G["上游 Commit 成功"]
-    G --> H["EventTriggerNotify(event, source, data_addr)"]
+    G --> H["EventTriggerNotify(event, sourceFunction)"]
     H --> I["DIRECT Dependency 判断"]
     I -->|存在 DIRECT 目标| J["DIRECT：(so_name, func_name) -> 目标函数标识列表"]
     I -->|无 DIRECT 目标或来源为零值| K["Bucket Trigger：IMMEDIATE / BY_NAME"]
@@ -136,7 +136,7 @@ type FunctionIdentity struct {
     FuncName string
 }
 
-func EventTriggerNotify(event DataReadyEvent, source FunctionIdentity) error
+func EventTriggerNotify(event DataReadyEvent, sourceFunction FunctionIdentity) error
 ~~~
 
 DataReadyEvent 包含 AppName、Bucket、Key、SessionID、DataAddr。外部 SMC Actor 传 FunctionIdentity{}。函数产出时，由 SDK 从当前执行上下文取得 AppName、SOName 和 FuncName。
@@ -294,7 +294,7 @@ Task Router 从内部 Function Registry 获取目标 Function 的完整 Resource
 | Registry | 模块内部唯一的运行时配置与索引 |
 | so_name | 动态库文件名，作为下游 Pool 识别执行载体的标识 |
 | func_name | 共享库内的函数名；与 so_name 组成函数标识 |
-| source | 本次数据的生产函数标识，包含 so_name 和 func_name，用于 DIRECT 匹配 |
+| sourceFunction | 本次数据的生产函数标识，包含 so_name 和 func_name，用于 DIRECT 匹配 |
 | DIRECT Dependency | 来源 (so_name, func_name) 到目标函数标识 的独立依赖关系 |
 | Bucket | App 范围内的数据逻辑命名空间 |
 | DataReadyEvent | 最小通知，包含 bucket、key、session_id |
@@ -684,10 +684,10 @@ Task Router 只提交 Task，不调用单独的协程唤醒接口。Task Corouti
 ~~~mermaid
 flowchart LR
     APP["上游应用启动流程"] -->|"TriggerInit(appJSONPath)"| PM["Pheromone-mini（Go）"]
-    SDK["上游 Data Bucket SDK"] -->|"EventTriggerNotify(event, source)"| PM
+    SDK["上游 Data Bucket SDK"] -->|"EventTriggerNotify(event, sourceFunction)"| PM
     PM -->|"TryEnqueue(TaskInvocation)"| POOL["Task Coroutine Pool"]
     POOL -->|"按 AppName + SOName + FuncName 加载并执行"| FN["Function"]
-    FN -->|"Object API Commit；SDK 注入 source"| SDK
+    FN -->|"Object API Commit；SDK 注入 sourceFunction"| SDK
 ~~~
 
 ### 10.3 接口分组与边界
@@ -878,13 +878,13 @@ func TriggerInit(appJSONPath string) error
 #### 10.6.2 PM-API-002：EventTriggerNotify
 
 ~~~go
-func EventTriggerNotify(event DataReadyEvent, source FunctionIdentity) error
+func EventTriggerNotify(event DataReadyEvent, sourceFunction FunctionIdentity) error
 ~~~
 
 | 参数 | 类型 | 说明 |
 |---|---|---|
 | event | DataReadyEvent | SDK 整批提交成功后发送，五个字段必填 |
-| source | FunctionIdentity | 产出函数的 AppName、SOName、FuncName。外部 Actor 传零值 |
+| sourceFunction | FunctionIdentity | 产出函数的 AppName、SOName、FuncName。外部 Actor 传零值 |
 
 1. 检查初始化状态。随后检查 AppName、Bucket、Key、SessionID 和 DataAddr。
 2. 按事件 AppName 查找已注册 App。来源非零时，三元组必须精确匹配该 App 已注册的函数。
@@ -1017,7 +1017,7 @@ sequenceDiagram
     App->>ET: TriggerInit(appJSONPath)
     ET->>ET: 读取 app.json，构建 Registry
     ET-->>App: 初始化成功后才允许发送事件
-    SDK->>ET: EventTriggerNotify(event, source)
+    SDK->>ET: EventTriggerNotify(event, sourceFunction)
     ET->>ET: Bucket 定位 / DIRECT 判断 / Trigger 匹配
     ET->>TB: TaskAction + EventDataView
     TB->>TB: 构建五字段 TaskInvocation
@@ -1048,7 +1048,7 @@ sequenceDiagram
 | 对象 | 创建方 | 使用方 | 释放方 / 有效期 |
 |---|---|---|---|
 | DataReadyEvent | 上游 SDK | EventTriggerNotify | 上游保证 notify 调用期间有效 |
-| source | 上游 SDK / TaskContext | DIRECT 匹配 | 上游保证 notify 调用期间有效 |
+| sourceFunction | 上游 SDK / TaskContext | DIRECT 匹配 | 上游保证 notify 调用期间有效 |
 | Bucket / Key / SessionID 字符串 | 上游 SDK | Task Builder / Pool / Function | Task Builder 复制异步任务所需字符串 |
 | TaskInvocation 描述符 | Task Builder | Router / Pool | Router 或 Pool 管理自己的描述符副本 |
 | DataAddr 指向的数据 | 上游 Data SDK | Task Builder / Pool / Function | Data SDK 自行判定完成并回收；本模块不提供完成判定契约 |
@@ -1096,7 +1096,7 @@ sequenceDiagram
 #### 11.7.2 上游 Data Bucket SDK 负责
 
 - Commit 成功后调用 EventTriggerNotify。
-- 传递 Bucket、Key、SessionID、source、dataAddr。
+- 传递 Bucket、Key、SessionID、sourceFunction、dataAddr。
 - 保证数据地址在 Session 相关任务完成或终止前有效。
 - Session 结束后回收数据。
 - Function 输出对象时注入当前 FuncName。
@@ -1114,7 +1114,7 @@ sequenceDiagram
 - 上游只使用 TriggerInit 和 EventTriggerNotify 两个 API。
 - TriggerInit 只接收 app.json 路径，并解析内嵌 functions[]。
 - DataReadyEvent 只有 Bucket、Key、SessionID。
-- source 是独立参数，外部 Actor 使用 FunctionIdentity{}。
+- sourceFunction 是独立参数，外部 Actor 使用 FunctionIdentity{}。
 - dataAddr 与上游 Commit 对象一致。
 - 不存在 DataRef Adapter 或 DataRef 相关 API。
 - 当前 App 内的 (so_name, func_name) 组合唯一，DIRECT 按该组合匹配来源。
@@ -1201,7 +1201,7 @@ Registry 是单进程单实例，不提供外部 create / register / seal / dest
 
 ### 13.3 EventTriggerNotify 并发
 
-DataReadyEvent 和 source 是只读借用值，在调用期间有效。Task Builder 必须复制后续异步任务所需的 Bucket、Key、SessionID 等字符串。
+DataReadyEvent 和 sourceFunction 是只读借用值，在调用期间有效。Task Builder 必须复制后续异步任务所需的 Bucket、Key、SessionID 等字符串。
 
 DataAddr 不复制、不释放。上游必须保证数据地址在 Session 结束且该 Session 产生的所有任务（包括 Delay Queue 项）完成或终止之前有效。
 
@@ -1574,7 +1574,7 @@ A、B 可在上下游开发期间独立执行。不同层次的状态、缺陷�
 | TEST-API-01 | DataReadyEvent 结构 | AppName、Bucket、Key、SessionID、DataAddr |
 | TEST-API-02 | TriggerInit | 只接收 app.json 路径，并解析内嵌 functions[] |
 | TEST-API-03 | EventTriggerNotify | 不包含 Registry 参数 |
-| TEST-API-04 | source 独立传入 | DIRECT 正确匹配 |
+| TEST-API-04 | sourceFunction 独立传入 | DIRECT 正确匹配 |
 | TEST-API-05 | 外部 Actor 传 FunctionIdentity{} | 正常执行 Bucket Trigger |
 | TEST-API-06 | DataAddr | 与上游 Commit 对象一致 |
 | TEST-API-07 | TaskPool 接口 | 只有 TryEnqueue(task)，不带 ctx |
@@ -1689,7 +1689,7 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 
 ### 2.1 角色
 
-- **上游 Data Bucket SDK：** Commit 数据、提供 bucket / key / session_id、source（FunctionIdentity）、data_addr，调用通知 API，并负责 Session 生命周期。
+- **上游 Data Bucket SDK：** Commit 数据、提供 bucket / key / session_id、sourceFunction（FunctionIdentity）、data_addr，调用通知 API，并负责 Session 生命周期。
 - **本模块：** TriggerInit、JSON Parser、App Registry、DIRECT Dependency、Event Trigger、Task Builder、Task Router、Delay Queue。
 - **下游 Task Coroutine Pool：** 唯一提供 TryEnqueue(TaskInvocation)，负责队列消费、协程调度、SO / Function 加载和执行。
 
@@ -1757,13 +1757,13 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 
 ### DIR-02：来源 Function 识别
 - **优先级：** P0
-- **输入：** EventTriggerNotify 的 source。
+- **输入：** EventTriggerNotify 的 sourceFunction。
 - **行为：** Function 写出对象时，Object SDK 从 TaskContext 注入 AppName、SOName 和 FuncName；外部 Actor 传 FunctionIdentity{}。
 - **验收：** 来源的 so_name 和 func_name 均须精确匹配当前 App 的函数定义。
 
 ### DIR-03：目标函数展开
 - **优先级：** P0
-- **行为：** source 对应多个 target func_name 时，每个目标生成独立 Task。
+- **行为：** sourceFunction 对应多个 target func_name 时，每个目标生成独立 Task。
 - **验收：** 每个 Task 携带目标 App、SO、函数名、会话和批地址。
 
 ### DIR-04：DIRECT 优先级
@@ -1781,7 +1781,7 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 ### EVT-01：Commit 成功后通知
 - **优先级：** P0
 - **行为：** 仅数据 Commit 成功后调用 EventTriggerNotify。
-- **验收：** 通知携带正确的 Bucket、Key、SessionID、source、dataAddr。
+- **验收：** 通知携带正确的 Bucket、Key、SessionID、sourceFunction、dataAddr。
 
 ### EVT-02：最小 DataReadyEvent
 - **优先级：** P0
@@ -1877,7 +1877,7 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 
 ### API-02：EventTriggerNotify
 - **优先级：** P0
-- **行为：** 本模块提供 EventTriggerNotify(event, source)。
+- **行为：** 本模块提供 EventTriggerNotify(event, sourceFunction)。
 - **验收：** DataReadyEvent 含 AppName、Bucket、Key、SessionID、DataAddr，来源函数标识单独传入。
 
 ### API-03：Pool TryEnqueue
@@ -2331,7 +2331,7 @@ type TaskInvocation struct {
 ~~~go
 func TriggerInit(appJSONPath string) error
 
-func EventTriggerNotify(event DataReadyEvent, source FunctionIdentity) error
+func EventTriggerNotify(event DataReadyEvent, sourceFunction FunctionIdentity) error
 ~~~
 
 用户根据附录 B 自行编写 app.json。全部初始化成功结束后才允许发送通知，禁止初始化与通知并发；初始化未完成返回 ErrNotInitialized。完整状态规则见第三部分 §11.6。
@@ -2382,7 +2382,7 @@ type TaskContext struct {
 
 TaskContext 是 Pool 与 Function / Object SDK 的逻辑执行上下文，不是本模块的第三个上游 API。Pool 应确保当前任务的 SOName 和 FuncName 能被 Object SDK 读取。
 
-Function 通过 Object API 写入输出数据。Object SDK 从 TaskContext 的 AppName、SOName 和 FuncName 构造 EventTriggerNotify 的 source。外部 SMC Actor 传 FunctionIdentity{}。
+Function 通过 Object API 写入输出数据。Object SDK 从 TaskContext 的 AppName、SOName 和 FuncName 构造 EventTriggerNotify 的 sourceFunction。外部 SMC Actor 传 FunctionIdentity{}。
 
 本模块不规定 Function 是 Go Plugin、cgo/native SO 还是其他执行载体；实际加载与调用 ABI 由下游 Pool 负责。
 
@@ -2395,7 +2395,7 @@ Function 通过 Object API 写入输出数据。Object SDK 从 TaskContext 的 A
 | 对象 | 创建方 | 使用方 | 所有权 / 有效期 |
 |---|---|---|---|
 | DataReadyEvent | 上游 SDK | EventTriggerNotify | 上游保证调用期间有效 |
-| source | 上游 SDK / TaskContext | DIRECT 匹配 | 上游保证调用期间有效 |
+| sourceFunction | 上游 SDK / TaskContext | DIRECT 匹配 | 上游保证调用期间有效 |
 | Bucket / Key / SessionID 字符串 | 上游 SDK | Task Builder / Pool / Function | Task Builder 复制异步任务所需字符串 |
 | TaskInvocation | Task Builder | Router / Pool | Router 或 Pool 管理自己的描述符副本 |
 | DataAddr 指向的数据 | 上游 Data SDK | Task Builder / Pool / Function | Data SDK 自行判定完成并回收；本模块不提供完成判定契约 |
@@ -2456,9 +2456,9 @@ SDK 负责批数据入口和其引用内容的布局及生命周期。同一 app
 
 ## D.6 DIRECT 与 Trigger 路径
 
-- source 有 DIRECT targets：构建 DIRECT Task，跳过 Bucket Trigger。
-- source 为零值或无 DIRECT targets：执行 Bucket Trigger 匹配。
-- 一个 DIRECT source 对应多个 target 时，每个 target 生成独立 Task。
+- sourceFunction 有 DIRECT targets：构建 DIRECT Task，跳过 Bucket Trigger。
+- sourceFunction 为零值或无 DIRECT targets：执行 Bucket Trigger 匹配。
+- 一个 DIRECT sourceFunction 对应多个 target 时，每个 target 生成独立 Task。
 - 一个 Bucket 多条 Trigger 命中时，每条规则生成独立 Task，不去重。
 - DIRECT 和 Bucket Trigger 都使用本次提交的批数据入口。
 

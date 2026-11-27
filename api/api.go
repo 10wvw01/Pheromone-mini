@@ -48,8 +48,8 @@ func TriggerInit(appJSONPath string) error {
 }
 
 // EventTriggerNotify 处理 SDK 成功提交后的数据就绪通知。
-// 函数产出时，SDK 从协程池提供的本次调用上下文透传 source。外部 Actor 产出时传 FunctionIdentity{}。
+// 函数产出时，SDK 从协程池提供的本次调用上下文透传 sourceFunction。外部 Actor 产出时传 FunctionIdentity{}。
 // event.DataAddr 必须指向非空批数据入口，SDK 须按 V0.6 §11.5 保持该地址有效，直至相关排队和执行结束。
-func EventTriggerNotify(event DataReadyEvent, source FunctionIdentity) error {
-	return wiring.Instance().Notify(event, source)
+func EventTriggerNotify(event DataReadyEvent, sourceFunction FunctionIdentity) error {
+	return wiring.Instance().Notify(event, sourceFunction)
 }

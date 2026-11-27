@@ -28,8 +28,13 @@ func TestConfig(t *testing.T) {
 	}
 	t.Run("TEST-APP-08", func(t *testing.T) {
 		app, err := config.Parse([]byte(strings.Replace(raw, "processor.so", "producer.so", 1)))
-		if err != nil || app.Functions["processor"].SOName != app.Functions["producer"].SOName {
-			t.Fatalf("one SO should serve both functions: %v", err)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"producer", "processor"} {
+			if _, ok := app.Functions[contract.FunctionIdentity{SOName: "producer.so", FuncName: name}]; !ok {
+				t.Fatalf("missing %s in producer.so", name)
+			}
 		}
 	})
 
@@ -44,7 +49,7 @@ func TestConfig(t *testing.T) {
 		{"TEST-APP-04/external", "\"functions\": [", "\"functions\": [\"functions.json\","},
 		{"TEST-APP-05", "\"so_name\": \"producer.so\",", ""},
 		{"TEST-APP-06", "\"func_name\": \"producer\",", ""},
-		{"TEST-APP-07", "\"func_name\": \"processor\"", "\"func_name\": \"producer\""},
+		{"TEST-APP-07/duplicate_pair", `"so_name": "processor.so",` + "\n" + `      "func_name": "processor"`, `"so_name": "producer.so",` + "\n" + `      "func_name": "producer"`},
 		{"TEST-APP-10/trigger", "\"function\": \"producer\"", "\"function\": \"unknown\""},
 		{"TEST-APP-10/direct", "\"direct_source\"\n      ],", "\"unknown\"\n      ],"},
 		{"TEST-APP-11/parent", "producer.so", "../producer.so"},
@@ -100,7 +105,7 @@ func TestConfig(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := app.Functions["producer"].Resource
+		got := app.Functions[contract.FunctionIdentity{SOName: "producer.so", FuncName: "producer"}].Resource
 		if got.MemoryMB != math.MaxUint64/config.MiB || got.GPU.DeviceCount != math.MaxUint32 ||
 			app.Delay.MaxWait != time.Duration(9223372036854)*time.Millisecond {
 			t.Fatalf("boundaries lost precision: %+v, %+v", got, app.Delay)

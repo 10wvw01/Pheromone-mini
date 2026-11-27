@@ -371,3 +371,51 @@ func mustReadConfig(t testing.TB) []byte {
 	}
 	return body
 }
+
+func TestSameFunctionNameInDifferentLibraries(t *testing.T) {
+	var libraries []string
+	r := engine.New(engine.Dependencies{
+		Pool: poolFunc(func(task contract.TaskInvocation) contract.EnqueueResult {
+			libraries = append(libraries, task.Function.SOName)
+			return contract.EnqueueAccepted
+		}),
+		Probe: probeFunc(func(context.Context, config.Domain, contract.FunctionInfo) (resource.Snapshot, error) {
+			return resource.Snapshot{CPUAvailable: 10, MemoryAvailable: 1 << 30}, nil
+		}),
+	})
+	t.Cleanup(r.Close)
+	body := `{
+		"app_name":"shared", "version":"1", "buckets":["output"],
+		"scheduler":{"delay_queue":{"enabled":false,"retry_interval_ms":10,"max_wait_ms":10}},
+		"functions":[
+			{"so_name":"first.so","func_name":"run","resource":{"cpu_cores":1,"memory_mb":1}},
+			{"so_name":"second.so","func_name":"run","resource":{"cpu_cores":1,"memory_mb":1}},
+			{"so_name":"fallback.so","func_name":"run","resource":{"cpu_cores":1,"memory_mb":1}}
+		],
+		"dependencies":[
+			{"type":"DIRECT","src_functions":[{"so_name":"first.so","func_name":"run"}],
+			 "tgt_functions":[{"so_name":"second.so","func_name":"run"}]},
+			{"type":"DIRECT","src_functions":[{"so_name":"second.so","func_name":"run"}],
+			 "tgt_functions":[{"so_name":"first.so","func_name":"run"}]}
+		],
+		"triggers":[{"bucket":"output","trigger_name":"fallback","primitive_type":"IMMEDIATE",
+			"primitive":{"function":{"so_name":"fallback.so","func_name":"run"}}}]
+	}`
+	for _, ambiguous := range []string{
+		strings.Replace(body, `"src_functions":[{"so_name":"first.so","func_name":"run"}]`, `"src_functions":["run"]`, 1),
+		strings.Replace(body, `"tgt_functions":[{"so_name":"first.so","func_name":"run"}]`, `"tgt_functions":["run"]`, 1),
+		strings.Replace(body, `"function":{"so_name":"fallback.so","func_name":"run"}`, `"function":"run"`, 1),
+	} {
+		assertCode(t, r.Init(writeConfig(t, ambiguous)), contract.ErrInvalidConfig)
+	}
+	assertCode(t, r.Init(writeConfig(t, body)), 0)
+	event := contract.DataReadyEvent{Bucket: "output", Key: "k", SessionID: "s"}
+	addr := unsafe.Pointer(new(byte))
+	assertCode(t, r.Notify(event, contract.FunctionIdentity{SOName: "first.so", FuncName: "run"}, addr), 0)
+	assertCode(t, r.Notify(event, contract.FunctionIdentity{SOName: "second.so", FuncName: "run"}, addr), 0)
+	assertCode(t, r.Notify(event, contract.FunctionIdentity{SOName: "fallback.so", FuncName: "run"}, addr), 0)
+	assertCode(t, r.Notify(event, contract.FunctionIdentity{}, addr), 0)
+	if got := strings.Join(libraries, ","); got != "second.so,first.so,fallback.so,fallback.so" {
+		t.Fatalf("unexpected routing: %s", got)
+	}
+}

@@ -35,4 +35,4 @@ go test -race -count=1 ./...
 
 上游从 `triggerEngine/api` 导入两项 API 和公共类型。集成方在本模块的部署入口用 `internal/engine.New` 组装真实 TaskPool，通过 `internal/wiring.Install` 在首次 API 调用前安装进程实例。生产资源适配器默认读取 Linux 资源接口。需要 GPU 准入的部署通过 `internal/resource.NewLinux` 提供进程可见设备遥测。关闭时先停止通知源，再调用内部运行时的 `Close`，由集成方管理 Pool 和 SDK 的后续收尾。
 
-测试代码、辅助包和测试数据统一放在 `tests/` 目录。
+测试代码、辅助包和测试数据统一放在 `tests/` 目录。全量测试包含 100 个复杂 `app.json` 配置路由场景（`TestComplexConfigRouting`）和 100 个复杂流程场景（`TestComplexDataDriven`）。

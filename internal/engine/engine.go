@@ -34,11 +34,6 @@ type bucket struct {
 	rules []config.Rule
 }
 
-// functionID 表示 V0.6 §13.2 定义的共享库和函数组合标识。
-type functionID struct {
-	soName, funcName string
-}
-
 // Runtime 持有进程的应用索引与调度器。应用注册结束后索引只读，见 V0.6 §13.1–13.3。
 type Runtime struct {
 	mu      sync.Mutex
@@ -46,7 +41,7 @@ type Runtime struct {
 	active  sync.WaitGroup
 	apps    map[string]*config.App
 	buckets map[string]bucket
-	funcs   map[functionID]contract.ResourceSpec
+	funcs   map[contract.FunctionIdentity]contract.ResourceSpec
 	delay   config.Delay
 
 	readConfig func(string) ([]byte, error)
@@ -84,7 +79,7 @@ func New(d Dependencies) *Runtime {
 	}
 	return &Runtime{
 		apps: make(map[string]*config.App), buckets: make(map[string]bucket),
-		funcs: make(map[functionID]contract.ResourceSpec), readConfig: d.ReadConfig,
+		funcs: make(map[contract.FunctionIdentity]contract.ResourceSpec), readConfig: d.ReadConfig,
 		router: newRouter(d),
 	}
 }
@@ -168,8 +163,7 @@ func (r *Runtime) publish(app *config.App) error {
 			return fmt.Errorf("buckets: name already registered in another App")
 		}
 	}
-	for _, fn := range app.Functions {
-		id := functionID{fn.SOName, fn.FuncName}
+	for id, fn := range app.Functions {
 		if spec, exists := r.funcs[id]; exists && spec != fn.Resource {
 			return fmt.Errorf("functions: conflicting resource for a shared SO/function pair")
 		}
@@ -181,8 +175,8 @@ func (r *Runtime) publish(app *config.App) error {
 	for name, rules := range app.Buckets {
 		r.buckets[name] = bucket{app: app, rules: rules}
 	}
-	for _, fn := range app.Functions {
-		r.funcs[functionID{fn.SOName, fn.FuncName}] = fn.Resource
+	for id, fn := range app.Functions {
+		r.funcs[id] = fn.Resource
 	}
 	return nil
 }
@@ -205,8 +199,7 @@ func (r *Runtime) beginNotify(event contract.DataReadyEvent, source contract.Fun
 		return bucket{}, apiError(contract.ErrInternal, "bucket index has no owning App")
 	}
 	if source != (contract.FunctionIdentity{}) {
-		fn, ok := b.app.Functions[source.FuncName]
-		if !ok || fn.SOName != source.SOName {
+		if _, ok := b.app.Functions[source]; !ok {
 			return bucket{}, apiError(contract.ErrInvalidArgument, "source so_name and func_name must identify a function in the bucket's App")
 		}
 	}

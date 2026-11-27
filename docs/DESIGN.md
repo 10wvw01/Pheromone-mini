@@ -46,9 +46,9 @@ V0.6 以 Pheromone 的两级调度、Data Bucket 和 Trigger 设计为基础，�
 | 对上游 API | 只暴露 TriggerInit 和 EventTriggerNotify 两个 API |
 | Bucket | 在当前调度实例管理的 App 范围内全局唯一；事件不携带 app_name |
 | Function 标识 | so_name 表示 SO 文件名；func_name 表示具体函数标识；两者独立 |
-| Function 唯一性 | func_name 在当前 App 内全局唯一；不同 App 可存在同名 func_name |
+| Function 唯一性 | (so_name, func_name) 在当前 App 内唯一；不同共享库可使用相同 func_name |
 | Function 资源 | 保留 CPU / Memory / GPU / Disk / Network Resource 字段；Task Router 必查 CPU / Memory，按需检查 GPU / Disk / Network；不定义未经确认的 Execution |
-| DIRECT | 独立依赖路径；(so_name, func_name) → target func_name[] |
+| DIRECT | 独立依赖路径；(so_name, func_name) → 目标函数标识列表 |
 | Trigger | IMMEDIATE、BY_NAME |
 | 多 Trigger | 一个 Bucket 可关联多条 Trigger；逐条匹配，逐条生成任务 |
 | DIRECT 优先级 | 来源标识存在 DIRECT 目标时走 DIRECT；否则执行 Bucket Trigger 匹配 |
@@ -91,7 +91,7 @@ flowchart TD
     F --> G["上游 Commit 成功"]
     G --> H["EventTriggerNotify(event, sourceFuncName, data_addr)"]
     H --> I["DIRECT Dependency 判断"]
-    I -->|存在 DIRECT 目标| J["DIRECT：(so_name, func_name) -> target func_name[]"]
+    I -->|存在 DIRECT 目标| J["DIRECT：(so_name, func_name) -> 目标函数标识列表"]
     I -->|无 DIRECT 目标或来源为零值| K["Bucket Trigger：IMMEDIATE / BY_NAME"]
     J --> L["Task Builder：构建 TaskInvocation"]
     K --> L
@@ -263,9 +263,9 @@ Task Router 从内部 Function Registry 获取目标 Function 的完整 Resource
 | 语言 | Go |
 | 调度实例 | 单进程、单个实例；内部唯一 Registry |
 | 配置入口 | TriggerInit(appJSONPath)，加载 app.json（包含内嵌 Function 配置） |
-| Function | so_name 与 func_name 分离；func_name 在当前 App 内唯一 |
+| Function | 以 (so_name, func_name) 组合标识；不同共享库可使用同名函数 |
 | Resource | 保留 CPU / Memory / GPU / Disk / Network 字段；Router 必查 CPU / Memory，按需检查 GPU / Disk / Network；不定义 Execution |
-| DIRECT | 独立依赖路径；(so_name, func_name) → target func_name[] |
+| DIRECT | 独立依赖路径；(so_name, func_name) → 目标函数标识列表 |
 | Trigger | IMMEDIATE、BY_NAME |
 | DataReadyEvent | 仅 bucket、key、session_id |
 | 通知参数 | sourceFuncName（FunctionIdentity）、data_addr 独立传入 |
@@ -298,9 +298,9 @@ Task Router 从内部 Function Registry 获取目标 Function 的完整 Resource
 | functions[] | app.json 内嵌 Function 配置，描述 so_name、func_name 和 Resource |
 | Registry | 模块内部唯一的运行时配置与索引 |
 | so_name | 动态库文件名，作为下游 Pool 识别执行载体的标识 |
-| func_name | 具体函数标识；在当前 App 内唯一 |
+| func_name | 共享库内的函数名；与 so_name 组成函数标识 |
 | sourceFuncName | 本次数据的生产函数标识，包含 so_name 和 func_name，用于 DIRECT 匹配 |
-| DIRECT Dependency | 来源 (so_name, func_name) 到目标 func_name 的独立依赖关系 |
+| DIRECT Dependency | 来源 (so_name, func_name) 到目标函数标识 的独立依赖关系 |
 | Bucket | 全局唯一的数据逻辑命名空间 |
 | DataReadyEvent | 最小通知，包含 bucket、key、session_id |
 | TaskArgument | 一项函数输入，包含 key、data_addr |
@@ -494,8 +494,8 @@ app.json 的 functions[] 每项描述一个 Function，核心结构：
 
 1. so_name 和 func_name 是不同概念，不能合并成 handler。
 2. 一个 SO 可以对应多个 func_name。
-3. func_name 在当前 App 内全局唯一；不同 App 可以使用同名 func_name。
-4. DIRECT 和 Trigger 的目标引用只使用 func_name。
+3. (so_name, func_name) 在当前 App 内唯一，不同共享库可以使用同名函数。
+4. DIRECT 和 Trigger 的函数引用可使用包含 so_name 和 func_name 的对象。函数名在当前 App 内只匹配一个函数时，也可使用字符串简写。
 5. 完整 resource 绑定到当前 Function 记录，即绑定到 so_name + func_name 这一对标识；Task Router 必查 CPUCores 和 MemoryMB，其余声明的资源按工程实现设计 §14.7 检查，完整配置透传给 Pool。
 6. 同一 so_name + func_name 被多个 App 复用时，其 resource 必须一致。
 7. so_name 必须是安全文件名，不允许路径穿越。
@@ -504,9 +504,9 @@ app.json 的 functions[] 每项描述一个 Function，核心结构：
 ### 5.4 功能点 APP-06：Function、DIRECT 和 Trigger 引用校验
 
 - functions[] 每项必须同时配置 so_name 和 func_name。
-- 同一 App 内 func_name 不得重复。
-- DIRECT 的 src_functions / tgt_functions 必须引用当前 App 已注册的 func_name。
-- Trigger 的目标 function 必须引用当前 App 已注册的 func_name。
+- 同一 App 内 (so_name, func_name) 不得重复。
+- DIRECT 的 src_functions / tgt_functions 必须引用当前 App 已注册的函数。
+- Trigger 的目标 function 必须引用当前 App 已注册的函数。
 - Bucket 必须在当前 App 的 buckets 中声明。
 - resource.cpu_cores、resource.memory_mb 必须是有效正数；gpu.device_count、gpu.memory_mb、disk_mb、network_mbps 必须是非负数。
 - 整数字段无损解析并校验 Go 类型范围；内存及时间换算上限见附录 B §B.5。多 App 延时配置不一致时拒绝当前 App，不能覆盖已有全局配置。
@@ -515,13 +515,13 @@ app.json 的 functions[] 每项描述一个 Function，核心结构：
 ### 5.5 功能点 APP-07：只读索引发布
 
 ~~~text
-function_index[app_name][func_name] -> FunctionInfo {
+function_index[app_name][(so_name, func_name)] -> FunctionInfo {
     so_name,
     func_name,
     resource
 }
 
-direct_index[app_name][(so_name, func_name)] -> [{target_func_name, InputMode}]
+direct_index[app_name][(so_name, func_name)] -> [{目标函数标识, InputMode}]
 bucket_index[bucket_name] -> AppRecord + TriggerList
 ~~~
 
@@ -554,7 +554,7 @@ DIRECT 不作为 Trigger Primitive，而是独立依赖路径。
 ~~~
 
 ~~~text
-direct_index[app_name][(so_name, func_name)] -> [{target_func_name, InputMode}]
+direct_index[app_name][(so_name, func_name)] -> [{目标函数标识, InputMode}]
 ~~~
 
 Bucket 全局索引先确定所属 App。初始化时，模块从当前 App 的 functions[] 解析 src_functions 引用的共享库和函数名，以 (so_name, func_name) 建立 DIRECT 索引。
@@ -563,7 +563,7 @@ Bucket 全局索引先确定所属 App。初始化时，模块从当前 App 的 
 
 1. 来源为 FunctionIdentity{}：跳过 DIRECT，进入 Bucket Trigger。
 2. 来源为非零值：校验两个字段都有效，且精确标识当前 App 中的同一个 Function，否则返回 ErrInvalidArgument。
-3. 存在 DIRECT target_func_name[]：为每个目标函数生成一个 DIRECT TaskAction，本次事件不再执行 Bucket Trigger。
+3. 存在 DIRECT 目标函数标识列表：为每个目标函数生成一个 DIRECT TaskAction，本次事件不再执行 Bucket Trigger。
 4. 没有 DIRECT 目标：进入 Bucket Trigger 匹配。
 5. 一个来源对应多个目标时，每个目标生成独立 TaskInvocation。
 
@@ -940,7 +940,7 @@ func TriggerInit(appJSONPath string) error
 2. 解析 App 顶层配置及内嵌 functions[]。
 3. 从 functions[] 逐项解析 SOName、FuncName、Resource。
 4. 校验 App、Function、Bucket、DIRECT、Trigger 和 Delay Queue 配置，包括数值换算边界及与已加载 App 的延时配置一致性（附录 B）。
-5. 校验 DIRECT / Trigger 引用的 func_name 均存在于当前 App。
+5. 校验 DIRECT / Trigger 的函数引用均能唯一解析到当前 App 中的函数。
 6. 在临时对象中构建 Function、Bucket、DIRECT、Trigger 索引。
 7. 全部成功后原子发布当前 AppRecord；任何一步失败，不留下部分可见配置。
 
@@ -1221,7 +1221,7 @@ sequenceDiagram
 - sourceFuncName 是独立参数，外部 Actor 使用 FunctionIdentity{}。
 - dataAddr 与上游 Commit 对象一致。
 - 不存在 DataRef Adapter 或 DataRef 相关 API。
-- func_name 在当前 App 内唯一，DIRECT 按来源的 (so_name, func_name) 匹配。
+- 当前 App 内的 (so_name, func_name) 组合唯一，DIRECT 按该组合匹配来源。
 - TaskInvocation 携带 FunctionInfo 和 Args[]，每个任务的 Args 长度为 1。
 - 下游 Pool 只有 TryEnqueue，不带 ctx。
 - 不存在 Pool 静态 Function 注册 API。
@@ -1296,13 +1296,13 @@ Registry 是单进程单实例，不提供外部 create / register / seal / dest
 
 ### 13.2 Function 与索引唯一性
 
-- func_name 在当前 App 内唯一。
+- (so_name, func_name) 在当前 App 内唯一。
 - so_name 可以被同一 App 的多个 Function 共享。
 - Function 记录以 so_name + func_name 作为执行入口组合标识。
 - FunctionInfo.Resource 与对应 Function 记录绑定。
-- DIRECT 索引以当前 App + (so_name, func_name) 为键，目标为 func_name 列表。
+- DIRECT 索引以当前 App + (so_name, func_name) 为键，目标为函数标识列表。
 - Bucket 在当前 Registry 所有 App 之间全局唯一。
-- Trigger 目标引用 func_name，不引用 so_name。
+- Trigger 目标解析为 (so_name, func_name)。
 
 ### 13.3 EventTriggerNotify 并发
 
@@ -1588,7 +1588,7 @@ A、B 可在上下游开发期间独立执行。不同层次的状态、缺陷�
 | TEST-APP-04 | functions[] 项结构 / 类型错误 | 初始化失败，不发布当前 App |
 | TEST-APP-05 | Function 缺少 so_name | 初始化失败 |
 | TEST-APP-06 | Function 缺少 func_name | 初始化失败 |
-| TEST-APP-07 | 同一 App 内 func_name 重复 | 拒绝配置 |
+| TEST-APP-07 | 同一 App 内 (so_name, func_name) 重复 | 拒绝配置 |
 | TEST-APP-08 | 同一 SO 对应多个不同 func_name | 配置通过 |
 | TEST-APP-09 | 不同 App 存在同名 func_name | 允许；按 Bucket 所属 App 隔离 |
 | TEST-APP-10 | Trigger / DIRECT 引用不存在的 func_name | 初始化失败 |
@@ -1742,8 +1742,8 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 下列行为要求按 A / B / C 分阶段提供证据，不能因为真实 SDK / Pool 尚未完成就跳过本模块可独立执行的验证。
 
 - TriggerInit 能读取 app.json 的全部配置，并原子发布 Registry。
-- Function 以 so_name + func_name 组合标识；func_name 在 App 内唯一。
-- DIRECT 按来源的 (so_name, func_name) 查询目标 func_name。
+- Function 以 (so_name, func_name) 组合标识，该组合在 App 内唯一。
+- DIRECT 按来源的 (so_name, func_name) 查询目标函数。
 - Immediate / ByName 和多 Trigger 行为正确。
 - DataReadyEvent 仅三个字段，EventTriggerNotify 包含独立 sourceFuncName、dataAddr。
 - TaskInvocation.Args[] 正确，Key 必须。
@@ -1810,8 +1810,8 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 - 数据统一通过 dataAddr 传递，不区分大小数据包。
 - 不存在 DataRef、INLINE / SHARED_MEMORY、validate / retain / release。
 - Key 在 TaskArgument 中必须存在。
-- so_name 和 func_name 分开；func_name 在当前 App 内唯一。
-- DIRECT 按来源的 (so_name, func_name) 查询目标 func_name。
+- (so_name, func_name) 在当前 App 内唯一。
+- DIRECT 按来源的 (so_name, func_name) 查询目标函数。
 - FunctionInfo（so_name、func_name、resource）随 TaskInvocation 传给 Pool。
 - Pool 只提供 TryEnqueue，不带 ctx；不提供静态 Function 注册 API。
 - Task Router 在 TryEnqueue 前执行 CPU / Memory 资源预检查。
@@ -1842,12 +1842,12 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 
 ### APP-05：Function 名称唯一性
 - **优先级：** P0
-- **行为：** func_name 在当前 App 内全局唯一。
-- **验收：** 同一 App 重复 func_name 拒绝；不同 App 同名 func_name 可通过 Bucket 所属 App 隔离。
+- **行为：** (so_name, func_name) 在当前 App 内唯一。
+- **验收：** 同一 App 内重复的 (so_name, func_name) 组合会被拒绝；不同共享库可使用同名函数。
 
 ### APP-06：DIRECT / Trigger 引用校验
 - **优先级：** P0
-- **行为：** dependencies 和 triggers 的函数引用必须指向当前 App 已注册的 func_name。
+- **行为：** dependencies 和 triggers 的函数引用必须唯一定位到当前 App 已注册的函数。
 - **验收：** 未注册函数引用导致初始化失败。
 
 ### APP-07：全局索引
@@ -2035,7 +2035,7 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 - **行为：** so_name 只能是安全文件名，不允许路径穿越或任意路径加载。
 
 ### SAFE-02：Function 标识校验
-- **行为：** func_name 必须属于当前 App 注册的 Function；本模块校验配置引用，不负责实际 SO 符号加载。
+- **行为：** 函数引用必须唯一定位到当前 App 已注册的 Function；本模块校验配置引用，不负责实际 SO 符号加载。
 
 ### SAFE-03：数据地址借用
 - **行为：** Scheduler / Pool 不得释放 DataAddr；上游按 Session 生命周期保证地址有效。
@@ -2116,7 +2116,7 @@ Pheromone 的 AppRegistration / DataDependency 使用 DIRECT 类型以及来源�
 - [app_register_handler.cpp：DIRECT 依赖保留](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/coordinator/app_register_handler.cpp)
 - [scheduler_server.cpp：DIRECT 分支优先于 Trigger 检查](https://github.com/MincYu/pheromone/blob/4d22677aa20dd94069da06d47ec2608504bf6bf4/src/scheduler/scheduler_server.cpp)
 
-V0.6 保留 DIRECT 独立路径、来源 Function 到多个目标 Function 的映射，以及 DIRECT 优先于 Bucket Trigger 的规则。每条 DIRECT 配置只声明一个 source func_name，多个目标放入 tgt_functions；DIRECT 的输入模式可由依赖项配置，缺省为 InputValue。固定提交的上游 `DataDependency` 没有 `trigger_option`，本地 DIRECT 分支依据数据打包方式构造参数和 `arg_flag`。0 / 1 / 2 三种输入语义取自上游 Bucket Trigger；在 DIRECT 配置中开放这三项是 V0.6 的设计。
+V0.6 保留 DIRECT 独立路径、来源 Function 到多个目标 Function 的映射，以及 DIRECT 优先于 Bucket Trigger 的规则。每条 DIRECT 配置只声明一个来源函数，多个目标放入 tgt_functions；DIRECT 的输入模式可由依赖项配置，缺省为 InputValue。固定提交的上游 `DataDependency` 没有 `trigger_option`，本地 DIRECT 分支依据数据打包方式构造参数和 `arg_flag`。0 / 1 / 2 三种输入语义取自上游 Bucket Trigger；在 DIRECT 配置中开放这三项是 V0.6 的设计。
 
 ## A.4 Bucket 与 Trigger
 
@@ -2312,7 +2312,7 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
 ## B.3 用户编写与启动步骤
 
 1. 确定 App 名称和 Bucket 名称；Bucket 必须跨 App 唯一。
-2. 在 functions[] 逐项填写 SO 名、函数名和资源需求；函数名在当前 App 内唯一。
+2. 在 functions[] 逐项填写 SO 名、函数名和资源需求；共享库名与函数名的组合在当前 App 内唯一。
 3. 用这些函数名编写 DIRECT 和 Trigger；设置 Delay Queue。
 4. 保存为 app.json，调用 TriggerInit(appJSONPath) 并检查返回 error；失败则修改配置后重试。
 5. 若有多个 App，依次完成全部初始化；成功结束后才允许发送事件，初始化与事件不得并发。
@@ -2340,7 +2340,7 @@ app.json 包含 App 元信息、内嵌 functions[]、Bucket、DIRECT、Trigger �
 | 字段 | 类型 | 约束 |
 |---|---|---|
 | so_name | string | 必填；安全 SO 文件名，不允许路径分隔符 |
-| func_name | string | 必填；当前 App 内唯一 |
+| func_name | string | 必填；与 so_name 组成 App 内唯一标识 |
 | description | string | 可选 |
 | version | string | 可选 |
 | resource.cpu_cores | number | 必填；有限且大于 0 |
@@ -2358,11 +2358,11 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 | 字段 | 类型 | 约束 |
 |---|---|---|
 | type | string | DIRECT |
-| src_functions | array(string) | 必填；恰好一个来源 func_name |
-| tgt_functions | array(string) | 必填；至少一个目标 func_name |
+| src_functions | array(函数引用) | 必填；恰好一个来源函数 |
+| tgt_functions | array(函数引用) | 必填；至少一个目标函数 |
 | trigger_option | integer | 可选；在 `dependencies[]` 中仅 DIRECT 支持；0 = Value（默认），1 = Key + Value，2 = Key Only |
 
-来源和目标必须属于同一 App 的 functions。配置继续用 App 内唯一的 func_name 引用函数，初始化时从函数定义读取 so_name，运行时按两个字段精确匹配来源。一个来源可对应多个目标；多个来源拆成多条依赖配置。
+来源和目标必须属于同一 App 的 functions。函数引用可写为 `{"so_name":"reader.so","func_name":"read"}`。字符串简写 `"read"` 仅在当前 App 内恰好有一个同名函数时有效；同名函数存在于多个共享库时，必须用对象指定库名和函数名。一个来源可对应多个目标；多个来源拆成多条依赖配置。
 
 字段写在 `dependencies[]` 的 DIRECT 对象内。完整 `app.json` 示例显式设置 `0`，目标函数收到 Value。省略字段时效果相同。以下两段配置可分别替换完整示例中的同一条依赖。
 
@@ -2406,7 +2406,7 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 | bucket | string | Trigger 必填，必须在本 App buckets 中 |
 | trigger_name | string | App 内唯一 |
 | primitive_type | string | IMMEDIATE / BY_NAME |
-| primitive.function | string | 目标 func_name，必须已注册 |
+| primitive.function | 函数引用 | 已注册的目标函数，支持 (so_name, func_name) 对象或无歧义的字符串简写 |
 | primitive.key_name | string | BY_NAME 必填；IMMEDIATE 禁止 |
 | trigger_option | integer | 0 / 1 / 2；默认 0 |
 
@@ -2428,10 +2428,10 @@ Function 配置不包含 execution、timeout_ms；GPU、Disk、Network 字段为
 2. app_name 在 Registry 内唯一；Bucket 跨全部 App 全局唯一。
 3. functions[] 必须是非空对象数组，Function 字段直接内嵌。
 4. 每项 Function 结构必须合法，so_name、func_name 必填；拒绝外部配置路径。
-5. func_name 在当前 App 内唯一；so_name 可以被多个 Function 共享。
+5. (so_name, func_name) 组合在当前 App 内唯一；同一个 so_name 可包含多个函数，不同 so_name 可声明同名函数。
 6. 同一 so_name + func_name 被多个 App 复用时，Resource 必须一致。
 7. 依赖只接受 DIRECT，其他类型在初始化时拒绝。每条 DIRECT 配置必须只有一个 src_functions 项，tgt_functions 至少一个；来源和目标都必须存在。
-8. Trigger 的 Bucket 和目标 func_name 必须存在；trigger_name 在 App 内唯一。
+8. Trigger 的 Bucket 必须存在，目标函数引用必须能唯一解析；trigger_name 在 App 内唯一。
 9. 仅接受 IMMEDIATE、BY_NAME；ByName 必须配置非空 key_name，Immediate 禁止 key_name。
 10. trigger_option 只允许 0、1、2。
 11. Delay Queue enabled 必须为布尔值；时间间隔和最大等待时间必须为正整数。
@@ -2940,7 +2940,7 @@ SDK 与 Pool 接口版本对齐后，在真实环境验证 Commit 通知、异�
 在 `Runtime.Notify` 里，先看 `beginNotify` 如何校验数据桶、来源函数和数据参数，再看直接依赖与数据桶规则的选择顺序。用同一份测试配置跟踪两条通知：
 
 1. 向 `input` 发送数据。它匹配 `IMMEDIATE` 规则，生成函数 `A` 的任务。
-2. `A` 提交 `output` 数据时，来源函数名命中 `A → B` 的 `DIRECT` 依赖，因此生成 `B` 的任务并跳过 `output` 上触发 `C` 的规则。也可以用 `named` 数据桶对照 `BY_NAME`，它只匹配键 `ready`。
+2. `A` 提交 `output` 数据时，来源函数标识命中 `A → B` 的 `DIRECT` 依赖，因此生成 `B` 的任务并跳过 `output` 上触发 `C` 的规则。也可以用 `named` 数据桶对照 `BY_NAME`，它只匹配键 `ready`。
 
 随后检查任务的 `Function`、`InputMode`、`SessionID` 和单项 `Args`。每个命中项有独立的任务描述，`DataAddr` 指向的数据由上游 SDK 保持有效，直至相关任务结束。 [事件处理](../internal/engine/engine.go) · [端到端用例中的 pipeline 与 byName](../tests/mocke2e/scenarios_test.go) · [设计第 6–8 章](#part-2)
 
@@ -2956,6 +2956,8 @@ SDK 与 Pool 接口版本对齐后，在真实环境验证 Commit 通知、异�
 |---|---|
 | 配置何时被拒绝，失败是否影响已注册应用 | `TestConfig`、`TestInitialization`、`TestPublication` |
 | 直接依赖与数据桶规则如何选择，任务池何时接收 | `TestMockAcceptance` 下的 `pipeline`、`byName` 和 `fanOut` |
+| 复杂配置下的路由优先级、同一 Bucket 的不同来源及多 App 隔离 | `TestComplexConfigRouting`，100 个生成的 app.json 配置场景 |
+| 多跳数据链路、扇出及故障恢复 | `TestComplexDataDriven`，100 个复杂流程场景 |
 | 资源何时恢复，重试何时结束 | `TestMockAcceptance` 下的 `recoverResources`、`expiry` 和 `deadlineDuringProbe` |
 | cgroup 与可选资源如何计算，真实 Linux 能读到什么 | `TestLinuxResourceCompatibility`、`TestAdditionalResources`、`TestLinuxEnvironment` |
 

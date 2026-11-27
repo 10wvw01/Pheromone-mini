@@ -55,7 +55,7 @@ type App struct {
 	Version     string
 	Delay       Delay
 	Domain      Domain
-	Functions   map[string]Function
+	Functions   map[contract.FunctionIdentity]Function
 	Buckets     map[string][]Rule
 	Direct      map[contract.FunctionIdentity][]Action
 }
@@ -113,8 +113,8 @@ type gpu struct {
 // dependency 对应附录 B §B.4 的直接依赖配置，用一个来源声明一个或多个目标。
 type dependency struct {
 	Type    string             `json:"type"`
-	Sources []string           `json:"src_functions"`
-	Targets []string           `json:"tgt_functions"`
+	Sources []functionRef      `json:"src_functions"`
+	Targets []functionRef      `json:"tgt_functions"`
 	Mode    contract.InputMode `json:"trigger_option"`
 }
 
@@ -129,8 +129,8 @@ type trigger struct {
 
 // primitive 保存规则目标函数和名称条件。Key 使用指针，以区分省略与显式空字符串。
 type primitive struct {
-	Function string  `json:"function"`
-	Key      *string `json:"key_name"`
+	Function functionRef `json:"function"`
+	Key      *string     `json:"key_name"`
 }
 
 // Parse 按 V0.6 附录 B §B.4–B.5 校验配置，并构建 §5.5 要求的只读查询索引。
@@ -156,7 +156,7 @@ func Parse(data []byte) (*App, error) {
 		Name: raw.Name, Description: raw.Description, Version: raw.Version,
 		Domain:    raw.Scheduler.Domain,
 		Delay:     Delay{*delay.Enabled, time.Duration(delay.RetryIntervalMS) * time.Millisecond, time.Duration(delay.MaxWaitMS) * time.Millisecond},
-		Functions: make(map[string]Function, len(raw.Functions)),
+		Functions: make(map[contract.FunctionIdentity]Function, len(raw.Functions)),
 		Buckets:   make(map[string][]Rule, len(raw.Buckets)),
 		Direct:    make(map[contract.FunctionIdentity][]Action),
 	}
@@ -170,10 +170,14 @@ func Parse(data []byte) (*App, error) {
 		}
 		app.Buckets[name] = nil
 	}
-	if err := app.addDependencies(raw.Dependencies); err != nil {
+	names := make(map[string][]contract.FunctionIdentity, len(app.Functions))
+	for id := range app.Functions {
+		names[id.FuncName] = append(names[id.FuncName], id)
+	}
+	if err := app.addDependencies(raw.Dependencies, names); err != nil {
 		return nil, err
 	}
-	if err := app.addRules(raw.Triggers); err != nil {
+	if err := app.addRules(raw.Triggers, names); err != nil {
 		return nil, err
 	}
 	return app, nil
@@ -186,8 +190,9 @@ func (app *App) addFunctions(functions []function) error {
 		if !safeName(fn.SOName) || blank(fn.FuncName) {
 			return fmt.Errorf("functions[%d]: unsafe so_name or empty func_name", i)
 		}
-		if _, exists := app.Functions[fn.FuncName]; exists {
-			return fmt.Errorf("functions[%d].func_name: duplicate function", i)
+		id := contract.FunctionIdentity{SOName: fn.SOName, FuncName: fn.FuncName}
+		if _, exists := app.Functions[id]; exists {
+			return fmt.Errorf("functions[%d]: duplicate so_name and func_name pair", i)
 		}
 		r := fn.Resource
 		if r.CPUCores <= 0 || math.IsNaN(r.CPUCores) || math.IsInf(r.CPUCores, 0) {
@@ -197,7 +202,7 @@ func (app *App) addFunctions(functions []function) error {
 			r.GPU.MemoryMB > math.MaxUint64/MiB || r.DiskMB > math.MaxUint64/MiB {
 			return fmt.Errorf("functions[%d].resource: invalid or overflowing MiB quantity", i)
 		}
-		app.Functions[fn.FuncName] = Function{
+		app.Functions[id] = Function{
 			Description: fn.Description, Version: fn.Version,
 			FunctionInfo: contract.FunctionInfo{
 				SOName: fn.SOName, FuncName: fn.FuncName,
@@ -228,35 +233,55 @@ func (app *App) addFunctions(functions []function) error {
 	return nil
 }
 
+// resolveFunction resolves explicit pairs and legacy names that identify a single function.
+func (app *App) resolveFunction(ref functionRef, names map[string][]contract.FunctionIdentity) (contract.FunctionIdentity, error) {
+	id := contract.FunctionIdentity(ref)
+	if id.SOName == "" {
+		matches := names[id.FuncName]
+		switch len(matches) {
+		case 0:
+			return id, fmt.Errorf("unknown function %q", id.FuncName)
+		case 1:
+			return matches[0], nil
+		default:
+			return id, fmt.Errorf("ambiguous function %q: specify so_name and func_name", id.FuncName)
+		}
+	}
+	if _, ok := app.Functions[id]; !ok {
+		return id, fmt.Errorf("unknown function %q in %q", id.FuncName, id.SOName)
+	}
+	return id, nil
+}
+
 // addDependencies 按 V0.6 §6.1–6.3 校验并建立来源函数到多个目标动作的索引。
-func (app *App) addDependencies(deps []dependency) error {
-	seen := make(map[[2]string]bool)
+func (app *App) addDependencies(deps []dependency, names map[string][]contract.FunctionIdentity) error {
+	seen := make(map[[2]contract.FunctionIdentity]bool)
 	for i, dep := range deps {
 		if dep.Type != "DIRECT" || len(dep.Sources) != 1 || len(dep.Targets) == 0 || dep.Mode > contract.InputKeyOnly {
 			return fmt.Errorf("dependencies[%d]: require DIRECT with one source, at least one target and trigger_option in 0..2", i)
 		}
-		source := dep.Sources[0]
-		sourceFn, ok := app.Functions[source]
-		if !ok {
-			return fmt.Errorf("dependencies[%d].src_functions: unknown source", i)
+		source, err := app.resolveFunction(dep.Sources[0], names)
+		if err != nil {
+			return fmt.Errorf("dependencies[%d].src_functions[0]: %w", i, err)
 		}
-		identity := contract.FunctionIdentity{SOName: sourceFn.SOName, FuncName: sourceFn.FuncName}
-		for j, target := range dep.Targets {
-			fn, ok := app.Functions[target]
-			// 同一来源和目标的组合只能声明一次。
-			pair := [2]string{source, target}
-			if !ok || seen[pair] {
-				return fmt.Errorf("dependencies[%d].tgt_functions[%d]: unknown or duplicate DIRECT pair", i, j)
+		for j, ref := range dep.Targets {
+			target, err := app.resolveFunction(ref, names)
+			if err != nil {
+				return fmt.Errorf("dependencies[%d].tgt_functions[%d]: %w", i, j, err)
+			}
+			pair := [2]contract.FunctionIdentity{source, target}
+			if seen[pair] {
+				return fmt.Errorf("dependencies[%d].tgt_functions[%d]: duplicate DIRECT pair", i, j)
 			}
 			seen[pair] = true
-			app.Direct[identity] = append(app.Direct[identity], Action{Function: fn.FunctionInfo, Mode: dep.Mode})
+			app.Direct[source] = append(app.Direct[source], Action{Function: app.Functions[target].FunctionInfo, Mode: dep.Mode})
 		}
 	}
 	return nil
 }
 
 // addRules 按 V0.6 §7.2–7.4 校验规则，保留同一数据桶的各条规则供独立匹配。
-func (app *App) addRules(rules []trigger) error {
+func (app *App) addRules(rules []trigger, names map[string][]contract.FunctionIdentity) error {
 	seen := make(map[string]bool)
 	for i, t := range rules {
 		if _, ok := app.Buckets[t.Bucket]; !ok {
@@ -265,9 +290,12 @@ func (app *App) addRules(rules []trigger) error {
 		if blank(t.Name) || seen[t.Name] {
 			return fmt.Errorf("triggers[%d].trigger_name: empty or duplicate name", i)
 		}
-		fn, ok := app.Functions[t.Primitive.Function]
-		if !ok || t.Mode > contract.InputKeyOnly {
-			return fmt.Errorf("triggers[%d]: unknown function or trigger_option outside 0..2", i)
+		id, err := app.resolveFunction(t.Primitive.Function, names)
+		if err != nil {
+			return fmt.Errorf("triggers[%d].primitive.function: %w", i, err)
+		}
+		if t.Mode > contract.InputKeyOnly {
+			return fmt.Errorf("triggers[%d].trigger_option: must be in 0..2", i)
 		}
 		var key string
 		// 立即触发不设名称条件，按名称触发保留配置中的原始键值。
@@ -285,7 +313,7 @@ func (app *App) addRules(rules []trigger) error {
 			return fmt.Errorf("triggers[%d].primitive_type: require IMMEDIATE or BY_NAME", i)
 		}
 		seen[t.Name] = true
-		app.Buckets[t.Bucket] = append(app.Buckets[t.Bucket], Rule{Name: t.Name, Key: key, Action: Action{Function: fn.FunctionInfo, Mode: t.Mode}})
+		app.Buckets[t.Bucket] = append(app.Buckets[t.Bucket], Rule{Name: t.Name, Key: key, Action: Action{Function: app.Functions[id].FunctionInfo, Mode: t.Mode}})
 	}
 	return nil
 }

@@ -9,12 +9,37 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"triggerEngine/internal/contract"
 )
 
 const (
 	MaxFileBytes   = 1 << 20
 	maxStringBytes = 4096
 )
+
+// functionRef accepts a full identity or a legacy unqualified function name.
+type functionRef contract.FunctionIdentity
+
+func (ref *functionRef) UnmarshalJSON(data []byte) error {
+	if data[0] == '"' {
+		var name string
+		if err := json.Unmarshal(data, &name); err != nil {
+			return err
+		}
+		*ref = functionRef{FuncName: name}
+		return nil
+	}
+	var id contract.FunctionIdentity
+	if err := json.Unmarshal(data, &id); err != nil {
+		return err
+	}
+	if !safeName(id.SOName) || blank(id.FuncName) {
+		return fmt.Errorf("function reference object requires valid so_name and func_name")
+	}
+	*ref = functionRef(id)
+	return nil
+}
 
 // decode 按 V0.6 附录 B §B.5 先校验 JSON 的字段名、重复字段、类型和边界，再解码到目标结构。
 func decode(data []byte, dst any) error {
@@ -41,6 +66,11 @@ func checkValue(dec *json.Decoder, typ reflect.Type, path string) error {
 	}
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
+	}
+	if typ == reflect.TypeFor[functionRef]() {
+		if name, ok := token.(string); ok && len(name) <= maxStringBytes {
+			return nil
+		}
 	}
 	// 使用配置声明的类型检查输入，避免隐式类型转换。
 	switch typ.Kind() {

@@ -93,7 +93,12 @@ func scenarios() []scenario {
 }
 
 func TestMockAcceptance(t *testing.T) {
-	for _, s := range scenarios() {
+	runMockScenarios(t, scenarios())
+}
+
+func runMockScenarios(t *testing.T, cases []scenario) {
+	t.Helper()
+	for _, s := range cases {
 		t.Run(s.id, func(t *testing.T) {
 			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestMockChild$", "-test.v", "-test.timeout=20s")
 			cmd.Env = append(os.Environ(), "PHEROMONE_MOCK_SCENARIO="+s.id)
@@ -109,9 +114,9 @@ func TestMockAcceptance(t *testing.T) {
 func TestMockChild(t *testing.T) {
 	id := os.Getenv("PHEROMONE_MOCK_SCENARIO")
 	if id == "" {
-		t.Skip("subprocess entry, executed by TestMockAcceptance")
+		t.Skip("subprocess entry for the Mock acceptance suites")
 	}
-	for _, s := range scenarios() {
+	for _, s := range slices.Concat(scenarios(), complexScenarios(), routingScenarios()) {
 		if s.id == id {
 			s.run(t)
 			t.Log("EXECUTED " + id)

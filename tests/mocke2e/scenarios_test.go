@@ -124,7 +124,7 @@ func TestMockChild(t *testing.T) {
 func TestFakePoolSelfCheck(t *testing.T) {
 	const capacity = 8
 	p := newPool(capacity, capacity)
-	p.execute[[2]string{"lib.so", "A"}] = logicalInput
+	p.execute[[2]string{"lib.so", "A"}] = (&mockSDK{}).logicalInput
 	p.script["rejected"] = []api.EnqueueResult{api.EnqueueError, api.EnqueueNoCapacity}
 	for _, result := range p.script["rejected"] {
 		if p.TryEnqueue(api.TaskInvocation{Function: api.FunctionInfo{FuncName: "rejected"}}) != result {
@@ -167,7 +167,7 @@ func pipeline(t *testing.T, startWorkerEarly bool) {
 	h.init(true)
 	out := api.DataReadyEvent{Bucket: "output", Key: "mid", SessionID: "s1"}
 	h.p.execute[[2]string{"first.so", "A"}] = func(task api.TaskInvocation) (string, error) {
-		in, err := logicalInput(task)
+		in, err := h.sdk.logicalInput(task)
 		if err != nil {
 			return "", err
 		}
@@ -451,7 +451,7 @@ func delayedMetadata(t *testing.T) {
 	runtime.GC()
 	h.p.start()
 	h.expect("A", api.InputValue, a, "A[x]")
-	if string(unsafe.Slice((*byte)(a.DataAddr), int(a.DataSize))) != "x" {
+	if value, err := h.sdk.readObject(a.DataAddr); err != nil || value != "x" {
 		t.Fatal("borrowed bytes changed")
 	}
 	h.count("A", 1, 1)
@@ -575,25 +575,25 @@ func errorCodes(t *testing.T) {
 	h := setup(t, 8, 8)
 	body := appBody(t)
 	ev := api.DataReadyEvent{Bucket: "input", Key: "k", SessionID: "s1"}
-	checkCode(t, api.EventTriggerNotify(ev, "", nil, 0), api.ErrNotInitialized)
+	checkCode(t, api.EventTriggerNotify(ev, "", unsafe.Pointer(new(byte))), api.ErrNotInitialized)
 	checkCode(t, api.TriggerInit(""), api.ErrInvalidArgument)
 	checkCode(t, api.TriggerInit("missing.json"), api.ErrConfigRead)
 	checkCode(t, api.TriggerInit(put(t, "[]")), api.ErrInvalidConfig)
 	checkCode(t, api.TriggerInit(put(t, strings.Replace(body, "40", "9223372036855", 1))), api.ErrInvalidConfig)
-	checkCode(t, api.EventTriggerNotify(ev, "", nil, 0), api.ErrNotInitialized)
+	checkCode(t, api.EventTriggerNotify(ev, "", unsafe.Pointer(new(byte))), api.ErrNotInitialized)
 	path := h.init(true)
 	conflict := strings.NewReplacer("\"e2e\"", "\"other\"", "\"enabled\":true", "\"enabled\":false").Replace(body)
 	checkCode(t, api.TriggerInit(put(t, conflict)), api.ErrInvalidConfig)
-	checkCode(t, api.EventTriggerNotify(ev, "", nil, 1), api.ErrInvalidArgument)
-	checkCode(t, api.EventTriggerNotify(ev, "unknown", nil, 0), api.ErrInvalidArgument)
+	checkCode(t, api.EventTriggerNotify(ev, "", nil), api.ErrInvalidArgument)
+	checkCode(t, api.EventTriggerNotify(ev, "unknown", unsafe.Pointer(new(byte))), api.ErrInvalidArgument)
 	ev.Key = ""
-	checkCode(t, api.EventTriggerNotify(ev, "", nil, 0), api.ErrInvalidArgument)
+	checkCode(t, api.EventTriggerNotify(ev, "", unsafe.Pointer(new(byte))), api.ErrInvalidArgument)
 	ev.Bucket, ev.Key = "missing", "k"
-	checkCode(t, api.EventTriggerNotify(ev, "", nil, 0), api.ErrInvalidArgument)
+	checkCode(t, api.EventTriggerNotify(ev, "", unsafe.Pointer(new(byte))), api.ErrInvalidArgument)
 	h.init(true, "\"e2e\"", "\"third\"", "\"input\"", "\"in3\"", "\"named\"", "\"name3\"",
 		"\"output\"", "\"out3\"", "\"fan\"", "\"fan3\"", "\"idle\"", "\"idle3\"")
 	ev.Bucket = "idle"
-	checkCode(t, api.EventTriggerNotify(ev, "", nil, 0), 0)
+	checkCode(t, api.EventTriggerNotify(ev, "", unsafe.Pointer(new(byte))), 0)
 	checkCode(t, api.TriggerInit(path), api.ErrInvalidState)
 	if len(h.p.audit()) != 0 {
 		t.Fatal("invalid notifications submitted work")
@@ -609,7 +609,7 @@ func cleanup(t *testing.T) {
 	h.log.await(t, "RESOURCE_INSUFFICIENT", "B", 2)
 	h.closeRuntime()
 	h.log.await(t, "TASK_CANCELLED", "B", 1)
-	checkCode(t, api.EventTriggerNotify(api.DataReadyEvent{}, "", nil, 0), api.ErrNotInitialized)
+	checkCode(t, api.EventTriggerNotify(api.DataReadyEvent{}, "", unsafe.Pointer(new(byte))), api.ErrNotInitialized)
 	h.p.start()
 	h.expect("A", api.InputValue, a, "A[x]")
 	h.count("B", 0, 0)
@@ -626,7 +626,7 @@ func multiApp(t *testing.T) {
 		`{"so_name":"other.so","func_name":"app2_only","resource":{"cpu_cores":1,"memory_mb":1}},`, 1)
 	checkCode(t, api.TriggerInit(put(t, strings.Replace(other, "idle2", "idle", 1))), api.ErrInvalidConfig)
 	checkCode(t, api.TriggerInit(put(t, other)), 0)
-	checkCode(t, api.EventTriggerNotify(api.DataReadyEvent{Bucket: "input", Key: "k", SessionID: "s1"}, "app2_only", nil, 0), api.ErrInvalidArgument)
+	checkCode(t, api.EventTriggerNotify(api.DataReadyEvent{Bucket: "input", Key: "k", SessionID: "s1"}, "app2_only", unsafe.Pointer(new(byte))), api.ErrInvalidArgument)
 	h.p.start()
 	main := h.send("input", "k", "", "x")
 	h.expect("A", api.InputValue, main, "A[x]")

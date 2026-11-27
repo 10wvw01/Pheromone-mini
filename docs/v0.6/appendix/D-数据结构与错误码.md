@@ -25,7 +25,6 @@ classDiagram
     class TaskArgument {
       key
       data_addr
-      data_size
     }
     class TaskInvocation {
       session_id
@@ -52,7 +51,7 @@ DataReadyEvent 只有三个字段：
 | Key | 是 | 本次提交对象 Key |
 | SessionID | 是 | 业务 Session |
 
-EventTriggerNotify 独立接收 sourceFuncName、dataAddr、dataSize。外部 Actor 的 sourceFuncName 为空字符串。
+EventTriggerNotify 独立接收 sourceFuncName、dataAddr。外部 Actor 的 sourceFuncName 为空字符串。
 
 不传 AppName、EventID、Trigger 配置、目标函数、PayloadType、DataRef、IP 或 RPC 地址。
 
@@ -67,7 +66,7 @@ EventTriggerNotify 独立接收 sourceFuncName、dataAddr、dataSize。外部 Ac
 | InputMode | 是 | InputValue / InputKeyValue / InputKeyOnly |
 | Args | 是 | 参数数组；长度为 1 |
 
-每个 TaskArgument 包含必填 Key、DataAddr 和 DataSize。DataAddr 在 DataSize 大于 0 时必须非空。
+每个 TaskArgument 包含必填 Key 和 DataAddr。DataAddr 必须非空。
 
 ## D.4 输入模式
 

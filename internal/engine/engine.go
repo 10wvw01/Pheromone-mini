@@ -188,14 +188,14 @@ func (r *Runtime) publish(app *config.App) error {
 }
 
 // beginNotify 按 V0.6 §13.1 核对状态、通知参数和数据桶归属，首条有效通知将运行时切换为运行状态。
-func (r *Runtime) beginNotify(event contract.DataReadyEvent, source string, addr unsafe.Pointer, size uint64) (bucket, error) {
+func (r *Runtime) beginNotify(event contract.DataReadyEvent, source string, addr unsafe.Pointer) (bucket, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stage != ready && r.stage != running {
 		return bucket{}, apiError(contract.ErrNotInitialized, "runtime is not ready to receive events")
 	}
-	if event.Bucket == "" || event.Key == "" || event.SessionID == "" || (addr == nil && size != 0) {
-		return bucket{}, apiError(contract.ErrInvalidArgument, "event requires bucket, key, session_id and an address for nonempty data")
+	if event.Bucket == "" || event.Key == "" || event.SessionID == "" || addr == nil {
+		return bucket{}, apiError(contract.ErrInvalidArgument, "event requires bucket, key, session_id and a non-nil data address")
 	}
 	b, ok := r.buckets[event.Bucket]
 	if !ok {
@@ -214,8 +214,8 @@ func (r *Runtime) beginNotify(event contract.DataReadyEvent, source string, addr
 }
 
 // Notify 按 V0.6 §6.2、§7.5 和 §8.4 选择触发路径，为每个命中项构建独立任务。
-func (r *Runtime) Notify(event contract.DataReadyEvent, source string, addr unsafe.Pointer, size uint64) error {
-	b, err := r.beginNotify(event, source, addr, size)
+func (r *Runtime) Notify(event contract.DataReadyEvent, source string, addr unsafe.Pointer) error {
+	b, err := r.beginNotify(event, source, addr)
 	if err != nil {
 		return err
 	}
@@ -227,7 +227,7 @@ func (r *Runtime) Notify(event contract.DataReadyEvent, source string, addr unsa
 		fn.SOName, fn.FuncName = strings.Clone(fn.SOName), strings.Clone(fn.FuncName)
 		task := contract.TaskInvocation{
 			SessionID: strings.Clone(event.SessionID), Function: fn, InputMode: action.Mode,
-			Args: []contract.TaskArgument{{Key: strings.Clone(event.Key), DataAddr: addr, DataSize: size}},
+			Args: []contract.TaskArgument{{Key: strings.Clone(event.Key), DataAddr: addr}},
 		}
 		log := r.router.log.With("app_name", b.app.Name, "bucket", strings.Clone(event.Bucket),
 			"source_func_name", strings.Clone(source), "route_path", path, "trigger_name", rule,

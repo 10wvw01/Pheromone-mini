@@ -111,13 +111,14 @@ type mockSDK struct {
 	mu        sync.Mutex
 	mem       [][]byte
 	committed map[api.DataReadyEvent]api.TaskArgument
+	lengths   map[unsafe.Pointer]int
 }
 
 func (s *mockSDK) commit(event api.DataReadyEvent, source, data string) (api.TaskArgument, error) {
 	s.mu.Lock()
 	a, seen := s.committed[event]
 	if seen {
-		if string(unsafe.Slice((*byte)(a.DataAddr), int(a.DataSize))) != data {
+		if string(unsafe.Slice((*byte)(a.DataAddr), s.lengths[a.DataAddr])) != data {
 			s.mu.Unlock()
 			return api.TaskArgument{}, errors.New("attempt to overwrite immutable object")
 		}
@@ -129,11 +130,12 @@ func (s *mockSDK) commit(event api.DataReadyEvent, source, data string) (api.Tas
 		}
 		copy(buf, data)
 		s.mem = append(s.mem, buf)
-		a = api.TaskArgument{Key: event.Key, DataAddr: unsafe.Pointer(&buf[0]), DataSize: uint64(len(data))}
+		a = api.TaskArgument{Key: event.Key, DataAddr: unsafe.Pointer(&buf[0])}
 		s.committed[event] = a
+		s.lengths[a.DataAddr] = len(data)
 	}
 	s.mu.Unlock()
-	return a, api.EventTriggerNotify(event, source, a.DataAddr, a.DataSize)
+	return a, api.EventTriggerNotify(event, source, a.DataAddr)
 }
 
 func (s *mockSDK) close(t *testing.T) {
@@ -144,7 +146,18 @@ func (s *mockSDK) close(t *testing.T) {
 	}
 }
 
-func logicalInput(task api.TaskInvocation) (string, error) {
+// readObject uses the test SDK's own object metadata to decode the borrowed address.
+func (s *mockSDK) readObject(addr unsafe.Pointer) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	length, ok := s.lengths[addr]
+	if !ok {
+		return "", errors.New("unknown object address")
+	}
+	return string(unsafe.Slice((*byte)(addr), length)), nil
+}
+
+func (s *mockSDK) logicalInput(task api.TaskInvocation) (string, error) {
 	if len(task.Args) != 1 || task.Args[0].Key == "" {
 		return "", errors.New("incorrect argument count or missing key")
 	}
@@ -153,9 +166,10 @@ func logicalInput(task api.TaskInvocation) (string, error) {
 	case api.InputKeyOnly:
 		return a.Key, nil
 	case api.InputValue:
-		return string(unsafe.Slice((*byte)(a.DataAddr), int(a.DataSize))), nil
+		return s.readObject(a.DataAddr)
 	case api.InputKeyValue:
-		return a.Key + "=" + string(unsafe.Slice((*byte)(a.DataAddr), int(a.DataSize))), nil
+		value, err := s.readObject(a.DataAddr)
+		return a.Key + "=" + value, err
 	}
 	return "", errors.New("invalid input mode")
 }
@@ -263,7 +277,7 @@ type harness struct {
 func setup(t *testing.T, queue, pending int) *harness {
 	t.Helper()
 	h := &harness{t: t, p: newPool(queue, queue+16), clock: testclock.New(),
-		sdk:   mockSDK{committed: make(map[api.DataReadyEvent]api.TaskArgument)},
+		sdk:   mockSDK{committed: make(map[api.DataReadyEvent]api.TaskArgument), lengths: make(map[unsafe.Pointer]int)},
 		probe: &probeScript{steps: make(map[string][]probeStep), calls: make(map[string]int)},
 		log:   &logSink{wake: make(chan struct{}, 1)},
 	}
@@ -274,7 +288,7 @@ func setup(t *testing.T, queue, pending int) *harness {
 	}
 	for _, id := range [][2]string{{"first.so", "A"}, {"second.so", "B"}, {"second.so", "C"}, {"other.so", "A"}} {
 		h.p.execute[id] = func(task api.TaskInvocation) (string, error) {
-			in, err := logicalInput(task)
+			in, err := h.sdk.logicalInput(task)
 			return id[1] + "[" + in + "]", err
 		}
 	}

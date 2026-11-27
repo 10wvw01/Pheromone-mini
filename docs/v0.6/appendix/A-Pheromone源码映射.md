@@ -49,7 +49,7 @@ V0.6 保留 Immediate、ByName、同 Bucket 多 Trigger 独立匹配和 Trigger 
 Pheromone 的 KVS 通知包含 BucketKeyAddress、Payload、数据地址和通信控制信息。V0.6 裁剪为：
 - DataReadyEvent：bucket、key、session_id；
 - source_func_name：独立参数；
-- data_addr、data_size：独立参数，统一地址传递。
+- data_addr：独立参数，统一地址传递。
 
 V0.6 不接收 app_name、active_trigger_names、ips、response_address、request_id、trigger_name、target_function、payload_type 或 DataRef。Bucket 在当前 Registry 全局唯一，本模块自行反查 App。
 
@@ -61,7 +61,7 @@ V0.6 收敛为 TaskInvocation：
 - SessionID；
 - FunctionInfo：so_name、func_name、resource；
 - InputMode；
-- Args[]：Key、DataAddr、DataSize。
+- Args[]：Key 和 DataAddr。
 
 FunctionInfo 随每个 TaskInvocation 通过 TryEnqueue 传递，不通过单独静态注册 API 交付。Pool 自行消费队列和唤醒协程。
 

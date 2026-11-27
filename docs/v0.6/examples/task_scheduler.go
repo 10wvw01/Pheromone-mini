@@ -39,7 +39,6 @@ type FunctionInfo struct {
 type TaskArgument struct {
 	Key      string
 	DataAddr unsafe.Pointer
-	DataSize uint64
 }
 
 type TaskInvocation struct {
@@ -64,7 +63,6 @@ type TriggerModule interface {
 		event DataReadyEvent,
 		sourceFuncName string,
 		dataAddr unsafe.Pointer,
-		dataSize uint64,
 	) error
 }
 

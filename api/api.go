@@ -55,7 +55,9 @@ func TriggerInit(appJSONPath string) error {
 	return wiring.Instance().Init(appJSONPath)
 }
 
-// EventTriggerNotify 按 V0.6 接口设计 §10.6.2 处理一次成功提交后的数据就绪通知。SDK 须按 §11.5 保持数据地址有效，直至相关排队和执行结束。
-func EventTriggerNotify(event DataReadyEvent, sourceFuncName string, dataAddr unsafe.Pointer, dataSize uint64) error {
-	return wiring.Instance().Notify(event, sourceFuncName, dataAddr, dataSize)
+// EventTriggerNotify 处理 SDK 成功提交后的数据就绪通知。
+// 函数产出时，SDK 从协程池提供的本次调用上下文透传 sourceFuncName。外部 Actor 产出时传空字符串。
+// dataAddr 必须非空，SDK 须按 V0.6 §11.5 保持该地址有效，直至相关排队和执行结束。
+func EventTriggerNotify(event DataReadyEvent, sourceFuncName string, dataAddr unsafe.Pointer) error {
+	return wiring.Instance().Notify(event, sourceFuncName, dataAddr)
 }

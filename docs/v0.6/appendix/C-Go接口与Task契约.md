@@ -46,7 +46,6 @@ type FunctionInfo struct {
 type TaskArgument struct {
     Key      string
     DataAddr unsafe.Pointer
-    DataSize uint64
 }
 
 type TaskInvocation struct {
@@ -71,7 +70,6 @@ func EventTriggerNotify(
     event DataReadyEvent,
     sourceFuncName string,
     dataAddr unsafe.Pointer,
-    dataSize uint64,
 ) error
 ~~~
 
@@ -79,7 +77,7 @@ func EventTriggerNotify(
 
 TriggerInit 只接收 app.json 路径。模块自行读取 app.json，并解析内嵌 functions[]。
 
-EventTriggerNotify 的 DataReadyEvent 只包含 Bucket、Key、SessionID。sourceFuncName、dataAddr、dataSize 是独立参数。外部 SMC Actor 的 sourceFuncName 使用空字符串。
+EventTriggerNotify 的 DataReadyEvent 只包含 Bucket、Key、SessionID。sourceFuncName、dataAddr 是独立参数。外部 SMC Actor 的 sourceFuncName 使用空字符串。
 
 ## C.3 POOL-API-001：TryEnqueue 下游接口
 

@@ -46,7 +46,7 @@ Mock 与被测模块引用同一份生产类型及接口定义，编译时检查
 3. 同一 Session / Bucket / Key 的测试对象写入后保持不可变；使用不同 Key 表示新对象，不通过覆盖旧对象制造生命周期歧义。
 4. 夹具持有全部测试映射，直到事件发生器停止、在途通知退出、内部延时项结束且 Fake Pool 消费退出，才统一解除映射；断言前后字节内容和地址一致性。
 5. 此处等待和清理仅用于测试夹具管理内存，不要求调度模块实现 Session 完成判定或生产回收协议。SDK 内部回收由 SDK 团队负责。
-6. Value / Key+Value / Key Only 分别检查逻辑输入语义。TaskArgument 仍携带必填 Key 和原始地址、长度；Key Only 测试函数不得解引用 Value。
+6. Value / Key+Value / Key Only 分别检查逻辑输入语义。TaskArgument 仍携带必填 Key 和原始地址；Key Only 测试函数不得解引用 Value。
 
 ## E.4 Fake Pool 契约与自检
 

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+	"unsafe"
 
 	"triggerEngine/internal/config"
 	"triggerEngine/internal/contract"
@@ -81,22 +82,22 @@ func TestInitialization(t *testing.T) {
 	}})
 	t.Cleanup(r.Close)
 	notice := contract.DataReadyEvent{Bucket: "b_result", Key: "k", SessionID: "s"}
-	assertCode(t, r.Notify(notice, "", nil, 0), contract.ErrNotInitialized)
+	assertCode(t, r.Notify(notice, "", unsafe.Pointer(new(byte))), contract.ErrNotInitialized)
 	assertCode(t, r.Init(""), contract.ErrInvalidArgument)
 	assertCode(t, r.Init("\x00"), contract.ErrInvalidArgument)
 	result := make(chan error, 1)
 	go func() { result <- r.Init(samplePath) }()
 	<-read
-	assertCode(t, r.Notify(notice, "", nil, 0), contract.ErrNotInitialized)
+	assertCode(t, r.Notify(notice, "", unsafe.Pointer(new(byte))), contract.ErrNotInitialized)
 	assertCode(t, r.Init(samplePath), contract.ErrInvalidState)
 	close(release)
 	assertCode(t, <-result, 0)
-	assertCode(t, r.Notify(notice, "unknown", nil, 0), contract.ErrInvalidArgument)
-	assertCode(t, r.Notify(notice, "", nil, 1), contract.ErrInvalidArgument)
+	assertCode(t, r.Notify(notice, "unknown", unsafe.Pointer(new(byte))), contract.ErrInvalidArgument)
+	assertCode(t, r.Notify(notice, "", nil), contract.ErrInvalidArgument)
 	// Invalid events must leave initialization open. Use a distinct app to avoid duplicate-name validation.
 	other := strings.NewReplacer("smc_demo", "other", "b_", "x_").Replace(string(appBody))
 	assertCode(t, r.Init(writeConfig(t, other)), 0)
-	assertCode(t, r.Notify(notice, "", nil, 0), 0)
+	assertCode(t, r.Notify(notice, "", unsafe.Pointer(new(byte))), 0)
 	assertCode(t, r.Init(samplePath), contract.ErrInvalidState)
 }
 
@@ -127,7 +128,7 @@ func TestPublication(t *testing.T) {
 	}
 	assertCode(t, r.Init(filepath.Join(tmp, "absent.json")), contract.ErrConfigRead)
 	assertCode(t, r.Init(put("invalid.json", string(raw)+"{}")), contract.ErrInvalidConfig)
-	assertCode(t, r.Notify(contract.DataReadyEvent{}, "", nil, 0), contract.ErrNotInitialized)
+	assertCode(t, r.Notify(contract.DataReadyEvent{}, "", unsafe.Pointer(new(byte))), contract.ErrNotInitialized)
 	assertCode(t, r.Init(samplePath), 0)
 
 	other := strings.NewReplacer("smc_demo", "other", "b_", "x_", "producer.so", "other.so").Replace(string(raw))
@@ -143,12 +144,12 @@ func TestPublication(t *testing.T) {
 	for _, tt := range conflicts {
 		t.Run(tt.id, func(t *testing.T) {
 			assertCode(t, r.Init(put("conflict.json", tt.config)), contract.ErrInvalidConfig)
-			assertCode(t, r.Notify(contract.DataReadyEvent{Bucket: "x_input", Key: "k", SessionID: "s"}, "", nil, 0), contract.ErrInvalidArgument)
+			assertCode(t, r.Notify(contract.DataReadyEvent{Bucket: "x_input", Key: "k", SessionID: "s"}, "", unsafe.Pointer(new(byte))), contract.ErrInvalidArgument)
 		})
 	}
 	assertCode(t, r.Init(put("other.json", other)), 0)
 	for _, name := range []string{"b_input", "x_input"} {
-		assertCode(t, r.Notify(contract.DataReadyEvent{Bucket: name, Key: "k", SessionID: "s"}, "", nil, 0), 0)
+		assertCode(t, r.Notify(contract.DataReadyEvent{Bucket: name, Key: "k", SessionID: "s"}, "", unsafe.Pointer(new(byte))), 0)
 	}
 	if len(tasks) != 2 || tasks[0].Function.SOName != "producer.so" || tasks[1].Function.SOName != "other.so" ||
 		tasks[0].Function.FuncName != tasks[1].Function.FuncName {
@@ -166,7 +167,7 @@ func FuzzNotify(f *testing.F) {
 		}
 		r := engine.New(engine.Dependencies{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 			Pool: poolFunc(func(task contract.TaskInvocation) contract.EnqueueResult {
-				if task.SessionID == "" || len(task.Args) != 1 || task.Args[0].Key == "" || task.Args[0].DataAddr != nil || task.Args[0].DataSize != 0 {
+				if task.SessionID == "" || len(task.Args) != 1 || task.Args[0].Key == "" || task.Args[0].DataAddr == nil {
 					t.Fatal("invalid task descriptor")
 				}
 				return contract.EnqueueAccepted
@@ -180,7 +181,7 @@ func FuzzNotify(f *testing.F) {
 		for len(chain) >= 3 {
 			event := contract.DataReadyEvent{Bucket: "b_input", Key: string([]byte{chain[1]}), SessionID: "s"}
 			var source string
-			var size uint64
+			addr := unsafe.Pointer(new(byte))
 			var want contract.StatusCode
 			switch chain[0] % 6 {
 			case 1:
@@ -190,11 +191,11 @@ func FuzzNotify(f *testing.F) {
 			case 3:
 				event.SessionID, want = "", contract.ErrInvalidArgument
 			case 4:
-				size, want = uint64(chain[2])+1, contract.ErrInvalidArgument
+				addr, want = nil, contract.ErrInvalidArgument
 			case 5:
 				source, want = "missing", contract.ErrInvalidArgument
 			}
-			assertCode(t, r.Notify(event, source, nil, size), want)
+			assertCode(t, r.Notify(event, source, addr), want)
 			chain = chain[3:]
 		}
 	})
@@ -222,7 +223,7 @@ func TestIndependentRuleDescriptors(t *testing.T) {
 	assertCode(t, r.Init("app.json"), 0)
 	// Both triggers address the same target and must still submit separately.
 	evt := contract.DataReadyEvent{Bucket: "b_shared", Key: "ready", SessionID: "session"}
-	assertCode(t, r.Notify(evt, "", nil, 0), 0)
+	assertCode(t, r.Notify(evt, "", unsafe.Pointer(new(byte))), 0)
 	if len(submitted) != 2 || slots[0] == slots[1] ||
 		submitted[0].InputMode != contract.InputValue || submitted[1].InputMode != contract.InputKeyValue {
 		t.Fatalf("TEST-EVT-04/TSK-07: wrong independent tasks: %+v", submitted)
@@ -246,12 +247,12 @@ func TestCloseInFlight(t *testing.T) {
 	assertCode(t, r.Init(samplePath), 0)
 	done := make(chan error, 1)
 	go func() {
-		done <- r.Notify(contract.DataReadyEvent{Bucket: "b_input", Key: "k", SessionID: "s"}, "", nil, 0)
+		done <- r.Notify(contract.DataReadyEvent{Bucket: "b_input", Key: "k", SessionID: "s"}, "", unsafe.Pointer(new(byte)))
 	}()
 	<-start
 	r.Close()
 	assertCode(t, <-done, 0)
-	assertCode(t, r.Notify(contract.DataReadyEvent{Bucket: "b_input", Key: "k", SessionID: "s"}, "", nil, 0), contract.ErrNotInitialized)
+	assertCode(t, r.Notify(contract.DataReadyEvent{Bucket: "b_input", Key: "k", SessionID: "s"}, "", unsafe.Pointer(new(byte))), contract.ErrNotInitialized)
 }
 
 func TestStaticContract(t *testing.T) {
@@ -323,7 +324,7 @@ func FuzzDelaySequence(f *testing.F) {
 				choice = value
 				beforeCalls, beforeProbes := calls, probes
 				if i == 0 {
-					assertCode(t, r.Notify(evt, "", nil, 0), 0)
+					assertCode(t, r.Notify(evt, "", unsafe.Pointer(new(byte))), 0)
 				} else {
 					clock.Advance(time.Duration(10+value/6) * time.Millisecond)
 				}

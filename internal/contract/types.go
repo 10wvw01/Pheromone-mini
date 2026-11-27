@@ -53,13 +53,14 @@ type FunctionInfo struct {
 
 // TaskArgument 保存输入键及由 SDK 管理的借用地址，见 V0.6 §10.5.2、§11.5。
 type TaskArgument struct {
-	Key      string
-	DataAddr unsafe.Pointer
+	Bucket    string
+	SessionID string
+	Key       string
+	DataAddr  unsafe.Pointer
 }
 
 // TaskInvocation 描述一次独立的函数调用。V0.6 每个派生任务携带一项 Args，见 §8.2–8.4。
 type TaskInvocation struct {
-	SessionID string
 	Function  FunctionInfo
 	InputMode InputMode
 	Args      []TaskArgument

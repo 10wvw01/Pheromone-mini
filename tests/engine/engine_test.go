@@ -167,7 +167,7 @@ func FuzzNotify(f *testing.F) {
 		}
 		r := engine.New(engine.Dependencies{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 			Pool: poolFunc(func(task contract.TaskInvocation) contract.EnqueueResult {
-				if task.SessionID == "" || len(task.Args) != 1 || task.Args[0].Key == "" || task.Args[0].DataAddr == nil {
+				if len(task.Args) != 1 || task.Args[0].Bucket == "" || task.Args[0].SessionID == "" || task.Args[0].Key == "" || task.Args[0].DataAddr == nil {
 					t.Fatal("invalid task descriptor")
 				}
 				return contract.EnqueueAccepted

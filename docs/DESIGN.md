@@ -163,10 +163,10 @@ Pool 根据 so_name 和 func_name 识别执行目标；具体采用 Go Plugin、
 
 ## 关键数据与生命周期
 
-- TaskArgument 包含 key、data_addr；key 必须存在。
+- TaskArgument 包含 bucket、session_id、key、data_addr；key 必须存在。
 - 当前一次 EventTriggerNotify 对应一个数据对象；每个命中目标构建独立 TaskInvocation，每个任务的 Args 长度为 1。
-- TaskInvocation 包含 session_id、FunctionInfo、InputMode 和 Args[]。
-- Task Builder 复制 key、session_id、so_name、func_name 等异步任务需要持有的字符串；不复制数据内容。
+- TaskInvocation 包含 FunctionInfo、InputMode 和 Args[]。
+- Task Builder 复制 bucket、key、session_id、so_name、func_name 等异步任务需要持有的字符串；不复制数据内容。
 - data_addr 是借用地址，不发生所有权转移；调度模块和 Pool 均不得释放该地址。
 - Go 接口使用 unsafe.Pointer 表示外部共享内存地址。该地址应指向上游管理的 mmap / 共享内存区域，不应指向未固定的 Go Heap 对象。
 - 上游必须保证 data_addr 在 Session 生命周期内有效，且在该 Session 派生的所有任务（包括 Delay Queue 中的待提交任务）完成或终止前，不得释放或复用。
@@ -303,7 +303,7 @@ Task Router 从内部 Function Registry 获取目标 Function 的完整 Resource
 | DIRECT Dependency | 来源 (so_name, func_name) 到目标函数标识 的独立依赖关系 |
 | Bucket | 全局唯一的数据逻辑命名空间 |
 | DataReadyEvent | 最小通知，包含 bucket、key、session_id |
-| TaskArgument | 一项函数输入，包含 key、data_addr |
+| TaskArgument | 一项函数输入，包含 bucket、session_id、key、data_addr |
 | TaskInvocation | 提交给 Task Coroutine Pool 的一次函数调用描述 |
 
 ## 第 2 章 Pheromone 源码参考与裁剪
@@ -420,8 +420,8 @@ App Registry 在启动阶段构建只读索引。运行期 DIRECT Dependency 和
 - EventDataView：EventTriggerNotify 的独立数据参数，包含 sourceFuncName（FunctionIdentity）、data_addr。
 - TaskAction：本模块内部对象，包含目标 FunctionInfo 和 InputMode；不传给下游。
 - FunctionInfo：so_name、func_name 和 ResourceSpec。
-- TaskArgument：一项函数输入，包含 key、data_addr。
-- TaskInvocation：交给 Pool 的一次函数调用描述，包含 session_id、FunctionInfo、InputMode 和 Args[]。
+- TaskArgument：一项函数输入，包含 bucket、session_id、key、data_addr。
+- TaskInvocation：交给 Pool 的一次函数调用描述，包含 FunctionInfo、InputMode 和 Args[]。
 - RouterPendingTask：Task Router 私有对象，包含 TaskInvocation 的自有元数据、首次延时时间和下次重试时间；data_addr 仍为借用地址，不拥有数据内存。
 
 ## 第 5 章 TriggerInit / App Registry / JSON Parser
@@ -569,7 +569,7 @@ Bucket 全局索引先确定所属 App。初始化时，模块从当前 App 的 
 
 ### 6.3 功能点 DIR-05：DIRECT 输入规则
 
-每条 DIRECT 依赖可选 `trigger_option`，整数 `0`（默认，Value）、`1`（Key + Value）、`2`（Key Only）。同一条依赖的所有目标使用同一模式，需要不同模式时拆成多条依赖。同一 App 内重复的 DIRECT 来源／目标对在初始化时拒绝。 参数始终保留原始 Key 和 DataAddr，Pool 依据 InputMode 生成执行输入视图。此配置不改变来源匹配条件或 DIRECT 优先级。Task Builder 使用当前事件的 key、data_addr 构建一个 TaskArgument，每个任务的 Args 长度为 1。
+每条 DIRECT 依赖可选 `trigger_option`，整数 `0`（默认，Value）、`1`（Key + Value）、`2`（Key Only）。同一条依赖的所有目标使用同一模式，需要不同模式时拆成多条依赖。同一 App 内重复的 DIRECT 来源／目标对在初始化时拒绝。 参数始终保留原始 Bucket、SessionID、Key 和 DataAddr，Pool 依据 InputMode 生成执行输入视图。此配置不改变来源匹配条件或 DIRECT 优先级。Task Builder 使用当前事件的 bucket、session_id、key 和通知的 data_addr 构建一个 TaskArgument，每个任务的 Args 长度为 1。
 
 ## 第 7 章 Event Trigger
 
@@ -612,14 +612,16 @@ event.Key == trigger.KeyName
 | 1 | InputKeyValue | Key + Value |
 | 2 | InputKeyOnly | Key Only |
 
-DIRECT 按依赖项的 trigger_option 映射输入模式，缺省为 InputValue。TaskArgument 内部始终包含必填 Key 和 DataAddr。
+DIRECT 按依赖项的 trigger_option 映射输入模式，缺省为 InputValue。TaskArgument 内部始终包含必填 Bucket、SessionID、Key 和 DataAddr。
 
 ### 8.2 功能点 TSK-02：构建 Args[]
 
 ~~~go
 type TaskArgument struct {
-    Key      string
-    DataAddr unsafe.Pointer
+    Bucket    string
+    SessionID string
+    Key       string
+    DataAddr  unsafe.Pointer
 }
 ~~~
 
@@ -627,6 +629,8 @@ type TaskArgument struct {
 
 ~~~text
 len(Args) = 1
+Args[0].Bucket = event.Bucket
+Args[0].SessionID = event.SessionID
 Args[0].Key = event.Key
 Args[0].DataAddr = dataAddr
 ~~~
@@ -657,7 +661,6 @@ type FunctionInfo struct {
 }
 
 type TaskInvocation struct {
-    SessionID string
     Function  FunctionInfo
     InputMode InputMode
     Args      []TaskArgument
@@ -793,12 +796,14 @@ DataReadyEvent 仅包含 Bucket、Key、SessionID，不包含 sourceFuncName、d
 
 ~~~go
 type TaskArgument struct {
-    Key      string
-    DataAddr unsafe.Pointer
+    Bucket    string
+    SessionID string
+    Key       string
+    DataAddr  unsafe.Pointer
 }
 ~~~
 
-Key 必须存在；DataAddr 必须非空。一次通知对应一个对象，每个派生任务的 Args 长度为 1。
+Bucket、SessionID 和 Key 必须存在；DataAddr 必须非空。一次通知对应一个对象，每个派生任务的 Args 长度为 1。
 
 #### 10.5.3 InputMode
 
@@ -850,14 +855,13 @@ SOName 与 FuncName 作用不同。Resource 保存 Function 的 CPU、Memory、G
 
 ~~~go
 type TaskInvocation struct {
-    SessionID string
     Function  FunctionInfo
     InputMode InputMode
     Args      []TaskArgument
 }
 ~~~
 
-TaskInvocation 不包含 AppName、Bucket、sourceFuncName、TriggerName、DataRef 或固定 handler 字段。
+Bucket、SessionID、Key 和 DataAddr 一起保存在 Args 的输入对象描述中。TaskInvocation 不包含 AppName、sourceFuncName、TriggerName、DataRef 或固定 handler 字段。
 
 #### 10.5.6 上游 API 统一错误格式
 
@@ -1041,7 +1045,6 @@ Pool 实例创建、装配和生命周期由下游 / 集成方负责，不属于
 
 ~~~go
 type TaskContext struct {
-    SessionID string
     SOName    string
     FuncName  string
     InputMode InputMode
@@ -1093,12 +1096,13 @@ Function 输出对象时，第二个参数传入由当前 TaskContext 的 SOName
 
 ~~~text
 TaskInvocation
-    SessionID = session_1001
     Function.SOName = image_process.so
     Function.FuncName = crop_image
     Function.Resource = {CPUCores: 2, MemoryMB: 512}
     InputMode = InputValue
     Args[0]:
+        Bucket = b_input
+        SessionID = session_1001
         Key = image_001
         DataAddr = committedObjectAddr
 ~~~
@@ -1152,7 +1156,7 @@ sequenceDiagram
 |---|---|---|---|
 | DataReadyEvent | 上游 SDK | EventTriggerNotify | 上游保证 notify 调用期间有效 |
 | sourceFuncName | 上游 SDK / TaskContext | DIRECT 匹配 | 上游保证 notify 调用期间有效 |
-| Key / SessionID 字符串 | 上游 SDK | Task Builder / Pool / Function | Task Builder 复制异步任务所需字符串 |
+| Bucket / Key / SessionID 字符串 | 上游 SDK | Task Builder / Pool / Function | Task Builder 复制异步任务所需字符串 |
 | TaskInvocation / Args 描述符 | Task Builder | Router / Pool | Router 或 Pool 管理自己的描述符副本 |
 | DataAddr 指向的数据 | 上游 Data SDK | Task Builder / Pool / Function | Data SDK 自行判定完成并回收；本模块不提供完成判定契约 |
 
@@ -1306,7 +1310,7 @@ Registry 是单进程单实例，不提供外部 create / register / seal / dest
 
 ### 13.3 EventTriggerNotify 并发
 
-DataReadyEvent 和 sourceFuncName 是只读借用值，在调用期间有效。Task Builder 必须复制后续异步任务所需的 Key、SessionID 等字符串。
+DataReadyEvent 和 sourceFuncName 是只读借用值，在调用期间有效。Task Builder 必须复制后续异步任务所需的 Bucket、Key、SessionID 等字符串。
 
 DataAddr 不复制、不释放。上游必须保证数据地址在 Session 结束且该 Session 产生的所有任务（包括 Delay Queue 项）完成或终止之前有效。
 
@@ -1881,7 +1885,7 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 ### DIR-05：DIRECT 输入模式
 - **优先级：** P0
 - **行为：** 每条 DIRECT 依赖可选 `trigger_option`，整数 `0`（默认，Value）、`1`（Key + Value）、`2`（Key Only）。同一条依赖的所有目标使用同一模式，需要不同模式时拆成多条依赖。同一 App 内重复的 DIRECT 来源／目标对在初始化时拒绝。
-- **验收：** TaskArgument 包含必填 Key 和 DataAddr。
+- **验收：** TaskArgument 包含必填 Bucket、SessionID、Key 和 DataAddr。
 
 ## 5. Event Trigger 需求
 
@@ -1930,19 +1934,19 @@ Fake Pool 使用真实 TaskPool 类型且完成复制 / 拒绝 / 异步消费自
 
 ### TSK-02：TaskArgument 构建
 - **优先级：** P0
-- **字段：** Key 和 DataAddr。
+- **字段：** Bucket、SessionID、Key 和 DataAddr。
 - **行为：** 一次通知携带一个对象；每个任务的 Args 长度为 1。
 - **验收：** Key 必须；DataAddr 与通知参数一致。
 
 ### TSK-03：TaskInvocation 构建
 - **优先级：** P0
-- **字段：** SessionID、FunctionInfo、InputMode、Args。
+- **字段：** FunctionInfo、InputMode、Args。
 - **行为：** 每个目标 Function 独立构建 TaskInvocation。
 - **验收：** TaskInvocation 不携带 DataRef、PayloadType、固定 handler 或 Trigger 内部元数据。
 
 ### TSK-04：异步元数据复制
 - **优先级：** P0
-- **行为：** 复制 Key、SessionID、SOName、FuncName 等异步任务需要持有的字符串及 Args 切片；不复制 DataAddr 指向的数据。
+- **行为：** 复制 Bucket、Key、SessionID、SOName、FuncName 等异步任务需要持有的字符串及 Args 切片；不复制 DataAddr 指向的数据。
 - **验收：** EventTriggerNotify 返回后调用方临时字符串失效，不影响排队任务；DataAddr 仍由上游保证有效。
 
 ### TSK-05：多目标数据地址共享
@@ -2506,12 +2510,13 @@ type FunctionInfo struct {
 }
 
 type TaskArgument struct {
-    Key      string
-    DataAddr unsafe.Pointer
+    Bucket    string
+    SessionID string
+    Key       string
+    DataAddr  unsafe.Pointer
 }
 
 type TaskInvocation struct {
-    SessionID string
     Function  FunctionInfo
     InputMode InputMode
     Args      []TaskArgument
@@ -2576,7 +2581,6 @@ type TaskPool interface {
 
 ~~~go
 type TaskContext struct {
-    SessionID string
     SOName    string
     FuncName  string
     InputMode InputMode
@@ -2600,7 +2604,7 @@ Function 通过 Object API 写入输出数据。Object SDK 从 TaskContext 的 S
 |---|---|---|---|
 | DataReadyEvent | 上游 SDK | EventTriggerNotify | 上游保证调用期间有效 |
 | sourceFuncName | 上游 SDK / TaskContext | DIRECT 匹配 | 上游保证调用期间有效 |
-| Key / SessionID 字符串 | 上游 SDK | Task Builder / Pool / Function | Task Builder 复制异步任务所需字符串 |
+| Bucket / Key / SessionID 字符串 | 上游 SDK | Task Builder / Pool / Function | Task Builder 复制异步任务所需字符串 |
 | TaskInvocation / Args | Task Builder | Router / Pool | Router 或 Pool 管理自己的描述符副本 |
 | DataAddr 指向的数据 | 上游 Data SDK | Task Builder / Pool / Function | Data SDK 自行判定完成并回收；本模块不提供完成判定契约 |
 
@@ -2643,11 +2647,12 @@ classDiagram
       session_id
     }
     class TaskArgument {
+      bucket
+      session_id
       key
       data_addr
     }
     class TaskInvocation {
-      session_id
       FunctionInfo
       InputMode
       Args
@@ -2686,7 +2691,7 @@ EventTriggerNotify 独立接收 sourceFuncName、dataAddr。外部 Actor 传 Fun
 | InputMode | 是 | InputValue / InputKeyValue / InputKeyOnly |
 | Args | 是 | 参数数组；长度为 1 |
 
-每个 TaskArgument 包含必填 Key 和 DataAddr。DataAddr 必须非空。
+每个 TaskArgument 包含必填 Bucket、SessionID、Key 和 DataAddr。DataAddr 必须非空。
 
 ## D.4 输入模式
 
@@ -2942,7 +2947,7 @@ SDK 与 Pool 接口版本对齐后，在真实环境验证 Commit 通知、异�
 1. 向 `input` 发送数据。它匹配 `IMMEDIATE` 规则，生成函数 `A` 的任务。
 2. `A` 提交 `output` 数据时，来源函数标识命中 `A → B` 的 `DIRECT` 依赖，因此生成 `B` 的任务并跳过 `output` 上触发 `C` 的规则。也可以用 `named` 数据桶对照 `BY_NAME`，它只匹配键 `ready`。
 
-随后检查任务的 `Function`、`InputMode`、`SessionID` 和单项 `Args`。每个命中项有独立的任务描述，`DataAddr` 指向的数据由上游 SDK 保持有效，直至相关任务结束。 [事件处理](../internal/engine/engine.go) · [端到端用例中的 pipeline 与 byName](../tests/mocke2e/scenarios_test.go) · [设计第 6–8 章](#part-2)
+随后检查任务的 `Function`、`InputMode` 和单项 `Args`。每个命中项有独立的任务描述，`DataAddr` 指向的数据由上游 SDK 保持有效，直至相关任务结束。 [事件处理](../internal/engine/engine.go) · [端到端用例中的 pipeline 与 byName](../tests/mocke2e/scenarios_test.go) · [设计第 6–8 章](#part-2)
 
 ## 4. 跟踪入队、重试和关闭
 

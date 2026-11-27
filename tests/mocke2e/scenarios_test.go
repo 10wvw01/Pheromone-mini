@@ -446,6 +446,11 @@ func terminalFailures(t *testing.T) {
 	h.log.await(t, "TASK_DELAY_FULL", "A", 1)
 	h.advance(step)
 	h.expect("A", api.InputValue, a, "A[x]")
+	for _, attempt := range h.p.audit() {
+		if attempt.task.Args[0].Bucket != "fan" {
+			t.Fatalf("Pool received bucket %q, want fan", attempt.task.Args[0].Bucket)
+		}
+	}
 	h.clock.Advance(time.Second)
 	h.count("A", 1, 1)
 	h.count("B", 1, 0)
@@ -508,7 +513,7 @@ func concurrent(t *testing.T, n, workers int) {
 			}
 			arg := e.task.Args[0]
 			pair := [2]string{id, arg.Key}
-			ev := api.DataReadyEvent{Bucket: "fan", SessionID: e.task.SessionID, Key: arg.Key}
+			ev := api.DataReadyEvent{Bucket: arg.Bucket, SessionID: arg.SessionID, Key: arg.Key}
 			if got[pair] || h.sdk.committed[ev] != arg || e.bytes != id+"[data-"+arg.Key+"]" {
 				t.Fatalf("wrong address, bytes or duplicate execution: %+v", e)
 			}

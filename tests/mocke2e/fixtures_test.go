@@ -130,7 +130,7 @@ func (s *mockSDK) commit(event api.DataReadyEvent, source api.FunctionIdentity, 
 		}
 		copy(buf, data)
 		s.mem = append(s.mem, buf)
-		a = api.TaskArgument{Key: event.Key, DataAddr: unsafe.Pointer(&buf[0])}
+		a = api.TaskArgument{Bucket: event.Bucket, SessionID: event.SessionID, Key: event.Key, DataAddr: unsafe.Pointer(&buf[0])}
 		s.committed[event] = a
 		s.lengths[a.DataAddr] = len(data)
 	}
@@ -364,7 +364,7 @@ func (h *harness) expect(target string, mode api.InputMode, a api.TaskArgument, 
 		if target == "B" {
 			wantCPU, wantMem = 2, 2
 		}
-		if result.err != nil || result.bytes != bytes || result.task.SessionID != "s1" ||
+		if result.err != nil || result.bytes != bytes ||
 			result.task.Function.FuncName != target || result.task.Function.SOName != expectedSO ||
 			result.task.Function.Resource != (api.ResourceSpec{CPUCores: wantCPU, MemoryMB: wantMem}) ||
 			result.task.InputMode != mode || !slices.Equal(result.task.Args, []api.TaskArgument{a}) {

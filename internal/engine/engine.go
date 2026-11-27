@@ -221,14 +221,17 @@ func (r *Runtime) Notify(event contract.DataReadyEvent, source contract.Function
 	dispatch := func(action config.Action, path, rule string) {
 		fn := action.Function
 		fn.SOName, fn.FuncName = strings.Clone(fn.SOName), strings.Clone(fn.FuncName)
-		task := contract.TaskInvocation{
-			SessionID: strings.Clone(event.SessionID), Function: fn, InputMode: action.Mode,
-			Args: []contract.TaskArgument{{Key: strings.Clone(event.Key), DataAddr: addr}},
+		arg := contract.TaskArgument{
+			Bucket: strings.Clone(event.Bucket), SessionID: strings.Clone(event.SessionID),
+			Key: strings.Clone(event.Key), DataAddr: addr,
 		}
-		log := r.router.log.With("app_name", b.app.Name, "bucket", strings.Clone(event.Bucket),
+		task := contract.TaskInvocation{
+			Function: fn, InputMode: action.Mode, Args: []contract.TaskArgument{arg},
+		}
+		log := r.router.log.With("app_name", b.app.Name, "bucket", arg.Bucket,
 			"source_so_name", strings.Clone(source.SOName), "source_func_name", strings.Clone(source.FuncName), "route_path", path, "trigger_name", rule,
-			"so_name", fn.SOName, "func_name", fn.FuncName, "session_id", task.SessionID,
-			"key", task.Args[0].Key, "input_mode", task.InputMode, "args_count", len(task.Args))
+			"so_name", fn.SOName, "func_name", fn.FuncName, "session_id", arg.SessionID,
+			"key", arg.Key, "input_mode", task.InputMode, "args_count", len(task.Args))
 		r.router.submit(task, b.app.Domain, b.app.Delay, log)
 	}
 	// 按 §6.2 和 §7.5 优先处理直接依赖。该路径命中后，跳过数据桶触发规则。

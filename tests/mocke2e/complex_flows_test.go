@@ -341,10 +341,10 @@ type flowConfigStats struct {
 }
 
 type flowDependency struct {
-	Type    string        `json:"type"`
-	Sources []string      `json:"src_functions"`
-	Targets []string      `json:"tgt_functions"`
-	Mode    api.InputMode `json:"trigger_option"`
+	Type    string                 `json:"type"`
+	Sources []api.FunctionIdentity `json:"src_functions"`
+	Targets []api.FunctionIdentity `json:"tgt_functions"`
+	Mode    api.InputMode          `json:"trigger_option"`
 }
 
 func (h *harness) installFlow(app flowApp, relays []flowRelay) flowConfigStats {
@@ -352,6 +352,9 @@ func (h *harness) installFlow(app flowApp, relays []flowRelay) flowConfigStats {
 	var functions, rules []map[string]any
 	var dependencies []flowDependency
 	var buckets []string
+	identity := func(name string) api.FunctionIdentity {
+		return api.FunctionIdentity{SOName: app.library, FuncName: name}
+	}
 	knownFunction := map[string]bool{}
 	knownBucket := map[string]bool{}
 	addFunction := func(name string) {
@@ -371,7 +374,7 @@ func (h *harness) installFlow(app flowApp, relays []flowRelay) flowConfigStats {
 	for i, rule := range app.rules {
 		addFunction(rule.target)
 		addBucket(rule.bucket)
-		primitive := map[string]string{"function": rule.target}
+		primitive := map[string]any{"function": identity(rule.target)}
 		kind := "IMMEDIATE"
 		if rule.key != "" {
 			kind = "BY_NAME"
@@ -393,13 +396,15 @@ func (h *harness) installFlow(app flowApp, relays []flowRelay) flowConfigStats {
 		key := sourceMode{edge.source, edge.mode}
 		if app.groupTargets {
 			if i, ok := grouped[key]; ok && len(dependencies[i].Targets) < 4 {
-				dependencies[i].Targets = append(dependencies[i].Targets, edge.target)
+				dependencies[i].Targets = append(dependencies[i].Targets, identity(edge.target))
 				continue
 			}
 			grouped[key] = len(dependencies)
 		}
 		dependencies = append(dependencies, flowDependency{
-			Type: "DIRECT", Sources: []string{edge.source}, Targets: []string{edge.target}, Mode: edge.mode,
+			Type: "DIRECT", Mode: edge.mode,
+			Sources: []api.FunctionIdentity{identity(edge.source)},
+			Targets: []api.FunctionIdentity{identity(edge.target)},
 		})
 	}
 	for _, relay := range relays {
@@ -449,9 +454,9 @@ func (h *harness) flowFunction(library, target string, relays []flowRelay) func(
 			case "$key":
 				key = task.Args[0].Key
 			case "$session":
-				key = task.SessionID
+				key = task.Args[0].SessionID
 			}
-			event := api.DataReadyEvent{Bucket: relay.bucket, Key: key, SessionID: task.SessionID}
+			event := api.DataReadyEvent{Bucket: relay.bucket, Key: key, SessionID: task.Args[0].SessionID}
 			if _, err := h.sdk.commit(event, api.FunctionIdentity{SOName: task.Function.SOName, FuncName: task.Function.FuncName}, output); err != nil {
 				return "", err
 			}
@@ -504,7 +509,7 @@ func (h *harness) collectFlowResults(wants []flowResult) {
 			match := -1
 			for i, want := range remaining {
 				if got.task.Function.SOName != want.library || got.task.Function.FuncName != want.target ||
-					got.task.SessionID != want.session || got.task.InputMode != want.mode ||
+					got.task.Args[0].Bucket != want.bucket || got.task.Args[0].SessionID != want.session || got.task.InputMode != want.mode ||
 					got.task.Args[0].Key != want.key || got.bytes != want.output {
 					continue
 				}

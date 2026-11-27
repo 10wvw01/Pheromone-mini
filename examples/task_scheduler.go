@@ -42,12 +42,13 @@ type FunctionIdentity struct {
 }
 
 type TaskArgument struct {
-	Key      string
-	DataAddr unsafe.Pointer
+	Bucket    string
+	SessionID string
+	Key       string
+	DataAddr  unsafe.Pointer
 }
 
 type TaskInvocation struct {
-	SessionID string
 	Function  FunctionInfo
 	InputMode InputMode
 	Args      []TaskArgument

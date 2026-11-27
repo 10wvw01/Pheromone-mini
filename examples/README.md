@@ -6,6 +6,14 @@
 go run ./examples
 ```
 
+默认路径由 Trigger 内部读取 Linux 资源信息。运行环境须提供可读的资源文件、可见的 cgroup 挂载及足够的 CPU 和内存。CI 或缺少这些资源接口的容器可以显式使用固定快照：
+
+```sh
+go run -tags examplefixture ./examples
+```
+
+该模式只替换资源采集结果。准入判断仍在 Router 内，在通知命中后、尝试入队前执行。
+
 程序先调用真实的 `api.TriggerInit` 注册三个 App，再由示例 SDK 调用真实的 `api.EventTriggerNotify`。Mock Pool 逐项出队，消费任务携带的批数据地址。示例校验 10 个任务的顺序、五字段入队契约、各 App 的最终结果，以及 BY_NAME 不命中和 DIRECT 抢占普通规则的行为。任何校验失败都会以非零状态退出，成功时最后一行是 `E2E passed`。
 
 ## 三个 App 的调用链
@@ -46,6 +54,6 @@ go run ./examples
 - [upstream.go](upstream.go) 展示上游接入。初始化及提交数据时，分别调用 `api.TriggerInit` 和 `api.EventTriggerNotify`。
 - 仓库根目录的 [mockpool](../mockpool/pool.go) 是 Trigger 可注入的简易下游 Pool，实现有界、非阻塞的进程内队列。
 - [main.go](main.go) 编排三个 App 的 E2E 场景，并通过验收用的消费接口逐项检查任务。
-- [runner.go](runner.go) 负责本地验收环境。它创建临时 Pool、配置固定资源快照并装配调度器。队列容量和资源快照都属于验收环境配置。
+- [runner.go](runner.go) 负责本地验收环境。它创建临时 Pool 并装配调度器。收到通知且命中规则后，Trigger 内部的 Router 使用默认 Linux 探测器完成资源准入。
 
 集成方在本仓库模块边界内用 `internal/engine.New` 装配 Pool，通过 `internal/wiring.Install` 安装运行时，随后上游才调用 `api` 包。Go 的 `internal` 可见性限制适用于装配代码，外部 Go 工程可以通过已装配的 `api` 接入业务通知。完整状态和资源准入契约见 [正式设计](../docs/DESIGN.md)。

@@ -43,6 +43,8 @@ go run ./examples
 
 `api.TaskPool.TryEnqueue(task api.TaskInvocation) api.EnqueueResult` 按值接收 `AppName / FuncName / SOName / DataAddr / SessionID`。返回 `EnqueueAccepted` 表示已接收，`EnqueueNoCapacity` 表示暂时无容量，`EnqueueError` 表示 Pool 错误。Pool 借用批地址，数据由 SDK 管理。
 
-[mockpool/pool.go](mockpool/pool.go) 实现带容量上限的非阻塞队列。示例在 [main.go](main.go) 中逐个出队，用 Go 回调模拟函数执行，并用固定资源快照让运行结果独立于机器负载。配置中的 SO 名用于路由和校验，示例无需编译动态库。
+- [upstream.go](upstream.go) 展示上游接入。初始化及提交数据时，分别调用 `api.TriggerInit` 和 `api.EventTriggerNotify`。
+- 仓库根目录的 [mockpool](../mockpool/pool.go) 是 Trigger 可注入的简易下游 Pool，实现有界、非阻塞的进程内队列。
+- [main.go](main.go) 是 E2E 运行和验收入口。它将 Mock Pool 注入 Trigger，逐项出队并用 Go 回调模拟执行。资源探测使用固定快照，配置中的 SO 名用于路由校验。
 
 集成方在本仓库模块边界内用 `internal/engine.New` 装配 Pool，通过 `internal/wiring.Install` 安装运行时，随后上游才调用 `api` 包。Go 的 `internal` 可见性限制适用于装配代码，外部 Go 工程可以通过已装配的 `api` 接入业务通知。完整状态和资源准入契约见 [正式设计](../docs/DESIGN.md)。

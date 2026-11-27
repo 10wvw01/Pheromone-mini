@@ -1,4 +1,4 @@
-// Package mockpool provides the bounded task queue used by the runnable example.
+// Package mockpool provides a simple in-process TaskPool for Trigger integration.
 package mockpool
 
 import "triggerEngine/api"
@@ -24,7 +24,7 @@ func (p *Pool) TryEnqueue(task api.TaskInvocation) api.EnqueueResult {
 	}
 }
 
-// TryDequeue lets the example advance the consumer one task at a time.
+// TryDequeue retrieves an accepted task without blocking the caller.
 func (p *Pool) TryDequeue() (api.TaskInvocation, bool) {
 	select {
 	case task := <-p.queue:

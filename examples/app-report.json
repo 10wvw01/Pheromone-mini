@@ -1,0 +1,70 @@
+{
+  "app_name": "report",
+  "version": "0.6.0",
+  "scheduler": {
+    "delay_queue": {
+      "enabled": false,
+      "retry_interval_ms": 10,
+      "max_wait_ms": 1000
+    }
+  },
+  "functions": [
+    {
+      "so_name": "join.so",
+      "func_name": "join",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 8
+      }
+    },
+    {
+      "so_name": "summarize.so",
+      "func_name": "summarize",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 8
+      }
+    },
+    {
+      "so_name": "publish.so",
+      "func_name": "publish",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 8
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "type": "DIRECT",
+      "src_functions": [
+        {
+          "so_name": "join.so",
+          "func_name": "join"
+        }
+      ],
+      "tgt_functions": [
+        "summarize"
+      ]
+    }
+  ],
+  "triggers": [
+    {
+      "bucket": "input",
+      "trigger_name": "to_join",
+      "primitive_type": "BY_NAME",
+      "primitive": {
+        "function": "join",
+        "key_name": "ready"
+      }
+    },
+    {
+      "bucket": "summary",
+      "trigger_name": "to_publish",
+      "primitive_type": "IMMEDIATE",
+      "primitive": {
+        "function": "publish"
+      }
+    }
+  ]
+}

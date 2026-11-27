@@ -1,0 +1,70 @@
+{
+  "app_name": "score",
+  "version": "0.6.0",
+  "scheduler": {
+    "delay_queue": {
+      "enabled": false,
+      "retry_interval_ms": 10,
+      "max_wait_ms": 1000
+    }
+  },
+  "functions": [
+    {
+      "so_name": "load.so",
+      "func_name": "load",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 8
+      }
+    },
+    {
+      "so_name": "weight.so",
+      "func_name": "weight",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 8
+      }
+    },
+    {
+      "so_name": "publish.so",
+      "func_name": "publish",
+      "resource": {
+        "cpu_cores": 1,
+        "memory_mb": 8
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "type": "DIRECT",
+      "src_functions": [
+        {
+          "so_name": "load.so",
+          "func_name": "load"
+        }
+      ],
+      "tgt_functions": [
+        "weight"
+      ]
+    }
+  ],
+  "triggers": [
+    {
+      "bucket": "input",
+      "trigger_name": "to_load",
+      "primitive_type": "IMMEDIATE",
+      "primitive": {
+        "function": "load"
+      }
+    },
+    {
+      "bucket": "weighted",
+      "trigger_name": "to_publish",
+      "primitive_type": "BY_NAME",
+      "primitive": {
+        "function": "publish",
+        "key_name": "ready"
+      }
+    }
+  ]
+}

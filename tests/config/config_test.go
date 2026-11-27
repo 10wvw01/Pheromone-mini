@@ -117,7 +117,7 @@ func TestConfig(t *testing.T) {
 			if option != "" {
 				want = contract.InputMode(option[len(option)-1] - '0')
 			}
-			if got := app.Direct["direct_source"][0].Mode; got != want {
+			if got := app.Direct[contract.FunctionIdentity{SOName: "direct_source.so", FuncName: "direct_source"}][0].Mode; got != want {
 				t.Fatalf("option %q mapped to %d, want %d", option, got, want)
 			}
 		}

@@ -57,7 +57,7 @@ type App struct {
 	Domain      Domain
 	Functions   map[string]Function
 	Buckets     map[string][]Rule
-	Direct      map[string][]Action
+	Direct      map[contract.FunctionIdentity][]Action
 }
 
 // fileConfig 对应 V0.6 附录 B §B.4 的 app.json 顶层结构，保留文件字段的原始形式。
@@ -158,7 +158,7 @@ func Parse(data []byte) (*App, error) {
 		Delay:     Delay{*delay.Enabled, time.Duration(delay.RetryIntervalMS) * time.Millisecond, time.Duration(delay.MaxWaitMS) * time.Millisecond},
 		Functions: make(map[string]Function, len(raw.Functions)),
 		Buckets:   make(map[string][]Rule, len(raw.Buckets)),
-		Direct:    make(map[string][]Action),
+		Direct:    make(map[contract.FunctionIdentity][]Action),
 	}
 	// 按 §5.4 先登记函数和数据桶，再校验直接依赖和触发规则对它们的引用。
 	if err := app.addFunctions(raw.Functions); err != nil {
@@ -236,9 +236,11 @@ func (app *App) addDependencies(deps []dependency) error {
 			return fmt.Errorf("dependencies[%d]: require DIRECT with one source, at least one target and trigger_option in 0..2", i)
 		}
 		source := dep.Sources[0]
-		if _, ok := app.Functions[source]; !ok {
+		sourceFn, ok := app.Functions[source]
+		if !ok {
 			return fmt.Errorf("dependencies[%d].src_functions: unknown source", i)
 		}
+		identity := contract.FunctionIdentity{SOName: sourceFn.SOName, FuncName: sourceFn.FuncName}
 		for j, target := range dep.Targets {
 			fn, ok := app.Functions[target]
 			// 同一来源和目标的组合只能声明一次。
@@ -247,7 +249,7 @@ func (app *App) addDependencies(deps []dependency) error {
 				return fmt.Errorf("dependencies[%d].tgt_functions[%d]: unknown or duplicate DIRECT pair", i, j)
 			}
 			seen[pair] = true
-			app.Direct[source] = append(app.Direct[source], Action{Function: fn.FunctionInfo, Mode: dep.Mode})
+			app.Direct[identity] = append(app.Direct[identity], Action{Function: fn.FunctionInfo, Mode: dep.Mode})
 		}
 	}
 	return nil

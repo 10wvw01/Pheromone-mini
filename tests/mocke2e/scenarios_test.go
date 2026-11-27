@@ -172,13 +172,13 @@ func pipeline(t *testing.T, startWorkerEarly bool) {
 			return "", err
 		}
 		value := "upper:" + strings.ToUpper(in)
-		_, err = h.sdk.commit(out, task.Function.FuncName, value)
+		_, err = h.sdk.commit(out, api.FunctionIdentity{SOName: task.Function.SOName, FuncName: task.Function.FuncName}, value)
 		return value, err
 	}
 	if startWorkerEarly {
 		h.p.start()
 	}
-	a := h.send("input", "seed", "", "abc")
+	a := h.send("input", "seed", api.FunctionIdentity{}, "abc")
 	if !startWorkerEarly {
 		if len(h.p.output) != 0 {
 			t.Fatal("work executed synchronously")
@@ -198,9 +198,9 @@ func byName(t *testing.T) {
 	h := setup(t, 8, 8)
 	h.init(true)
 	h.p.start()
-	h.send("named", "Ready", "", "negative")
+	h.send("named", "Ready", api.FunctionIdentity{}, "negative")
 	h.count("A", 0, 0)
-	a := h.send("named", "ready", "", "ignored")
+	a := h.send("named", "ready", api.FunctionIdentity{}, "ignored")
 	h.expect("A", api.InputKeyOnly, a, "A[ready]")
 	h.count("A", 1, 1)
 }
@@ -214,12 +214,21 @@ func fanOut(t *testing.T, direct bool) {
 	}
 	h.p.start()
 	if direct {
-		a := h.send("fan", "k", "A", "v")
+		event := api.DataReadyEvent{Bucket: "fan", Key: "k", SessionID: "s1"}
+		addr := unsafe.Pointer(new(byte))
+		for _, source := range []api.FunctionIdentity{
+			{SOName: "second.so", FuncName: "A"},
+			{FuncName: "A"},
+			{SOName: "first.so"},
+		} {
+			checkCode(t, api.EventTriggerNotify(event, source, addr), api.ErrInvalidArgument)
+		}
+		a := h.send("fan", "k", api.FunctionIdentity{SOName: "first.so", FuncName: "A"}, "v")
 		h.expect("B", api.InputKeyValue, a, "B[k=v]")
 		h.expect("C", api.InputKeyValue, a, "C[k=v]")
 		h.count("A", 0, 0)
 	} else {
-		a := h.send("fan", "k", "", "v")
+		a := h.send("fan", "k", api.FunctionIdentity{}, "v")
 		h.expect("A", api.InputValue, a, "A[v]")
 		h.expect("B", api.InputValue, a, "B[v]")
 		h.count("C", 0, 0)
@@ -238,12 +247,12 @@ func inputModes(t *testing.T) {
 		{"type":"DIRECT","src_functions":["B"],"tgt_functions":["A"],"trigger_option":0},`
 	h.init(true, "\"dependencies\": [", "\"dependencies\": ["+extra)
 	h.p.start()
-	a := h.send("fan", "key", "C", "value")
+	a := h.send("fan", "key", api.FunctionIdentity{SOName: "second.so", FuncName: "C"}, "value")
 	h.expect("A", api.InputValue, a, "A[value]")
 	h.expect("B", api.InputKeyOnly, a, "B[key]")
-	a = h.send("fan", "k1", "A", "v1")
+	a = h.send("fan", "k1", api.FunctionIdentity{SOName: "first.so", FuncName: "A"}, "v1")
 	h.expect("B", api.InputKeyValue, a, "B[k1=v1]")
-	a = h.send("fan", "k2", "B", "v2")
+	a = h.send("fan", "k2", api.FunctionIdentity{SOName: "second.so", FuncName: "B"}, "v2")
 	h.expect("A", api.InputValue, a, "A[v2]")
 	h.count("A", 2, 2)
 	h.count("B", 2, 2)
@@ -255,7 +264,7 @@ func recoverResources(t *testing.T, failure probeStep, log, reason string, enabl
 	h.probe.steps["A"] = []probeStep{failure, enough}
 	h.init(enabled)
 	h.p.start()
-	a := h.send("input", "k", "", "x")
+	a := h.send("input", "k", api.FunctionIdentity{}, "x")
 	first := h.log.await(t, log, "A", 1)
 	if first["delay_enabled"] != enabled || (reason != "" && first["probe_failure_reason"] != reason) {
 		t.Fatalf("bad resource log: %+v", first)
@@ -280,8 +289,8 @@ func recoverResources(t *testing.T, failure probeStep, log, reason string, enabl
 func capacityRecovery(t *testing.T, enabled bool) {
 	h := setup(t, 1, 8)
 	h.init(enabled)
-	first := h.send("input", "first", "", "x")
-	second := h.send("input", "second", "", "y")
+	first := h.send("input", "first", api.FunctionIdentity{}, "x")
+	second := h.send("input", "second", api.FunctionIdentity{}, "y")
 	h.count("A", 2, 1)
 	logName := "POOL_NO_CAPACITY"
 	if !enabled {
@@ -316,7 +325,7 @@ func expiry(t *testing.T, poolFull bool) {
 	}
 	h.init(true)
 	h.p.start()
-	h.send("input", "k", "", "x")
+	h.send("input", "k", api.FunctionIdentity{}, "x")
 	original := h.log.await(t, reason, "A", 1)
 	for i := 2; i <= 4; i++ {
 		h.advance(step)
@@ -344,7 +353,7 @@ func mixedReasons(t *testing.T) {
 	h.p.script["A"] = []api.EnqueueResult{api.EnqueueNoCapacity, api.EnqueueNoCapacity}
 	h.init(true, "\"max_wait_ms\":40", "\"max_wait_ms\":60")
 	h.p.start()
-	a := h.send("input", "k", "", "x")
+	a := h.send("input", "k", api.FunctionIdentity{}, "x")
 	first := h.log.await(t, "POOL_NO_CAPACITY", "A", 1)
 	for _, event := range []struct {
 		msg, reason string
@@ -370,7 +379,7 @@ func deadlineTie(t *testing.T) {
 	h := setup(t, 8, 8)
 	h.probe.steps["A"] = []probeStep{lowCPU, enough}
 	h.init(true, "\"max_wait_ms\":40", "\"max_wait_ms\":10")
-	h.send("input", "k", "", "x")
+	h.send("input", "k", api.FunctionIdentity{}, "x")
 	h.advance(step)
 	h.log.await(t, "TASK_DELAY_EXPIRED", "A", 1)
 	if h.probe.count("A") != 1 {
@@ -388,7 +397,7 @@ func deadlineDuringProbe(t *testing.T) {
 		}
 	}
 	h.init(true)
-	h.send("input", "k", "", "x")
+	h.send("input", "k", api.FunctionIdentity{}, "x")
 	h.advance(step)
 	h.log.await(t, "TASK_DELAY_EXPIRED", "A", 1)
 	h.count("A", 0, 0)
@@ -402,7 +411,7 @@ func partial(t *testing.T, restore bool) {
 	}
 	h.init(true)
 	h.p.start()
-	a := h.send("fan", "k", "", "x")
+	a := h.send("fan", "k", api.FunctionIdentity{}, "x")
 	h.expect("A", api.InputValue, a, "A[x]")
 	h.count("A", 1, 1)
 	h.count("B", 0, 0)
@@ -426,9 +435,9 @@ func terminalFailures(t *testing.T) {
 	h.probe.steps["A"] = []probeStep{lowCPU, lowCPU, enough}
 	h.init(true)
 	h.p.start()
-	a := h.send("fan", "kept", "", "x")
+	a := h.send("fan", "kept", api.FunctionIdentity{}, "x")
 	h.log.await(t, "POOL_ERROR", "B", 1)
-	h.send("input", "rejected", "", "y")
+	h.send("input", "rejected", api.FunctionIdentity{}, "y")
 	h.log.await(t, "TASK_DELAY_FULL", "A", 1)
 	h.advance(step)
 	h.expect("A", api.InputValue, a, "A[x]")
@@ -443,7 +452,7 @@ func delayedMetadata(t *testing.T) {
 	h.init(true)
 	key := strings.Repeat("m", 1024)
 	ev := api.DataReadyEvent{Bucket: "input", Key: key, SessionID: "s1"}
-	a, err := h.sdk.commit(ev, "", "x")
+	a, err := h.sdk.commit(ev, api.FunctionIdentity{}, "x")
 	checkCode(t, err, 0)
 	ev, key = api.DataReadyEvent{}, ""
 	runtime.KeepAlive(ev)
@@ -469,7 +478,7 @@ func concurrent(t *testing.T, n, workers int) {
 			<-start
 			for i := worker; i < n; i += workers {
 				ev := api.DataReadyEvent{Bucket: "fan", SessionID: fmt.Sprintf("s%d", i%7), Key: fmt.Sprint(i)}
-				_, err := h.sdk.commit(ev, "", "data-"+ev.Key)
+				_, err := h.sdk.commit(ev, api.FunctionIdentity{}, "data-"+ev.Key)
 				if err != nil {
 					sendErr <- err
 				}
@@ -520,7 +529,7 @@ func concurrentBoundedPool(t *testing.T) {
 		wg.Go(func() {
 			<-start
 			event := api.DataReadyEvent{Bucket: "input", Key: fmt.Sprint(i), SessionID: "s1"}
-			_, err := h.sdk.commit(event, "", "data-"+event.Key)
+			_, err := h.sdk.commit(event, api.FunctionIdentity{}, "data-"+event.Key)
 			errs <- err
 		})
 	}
@@ -575,25 +584,25 @@ func errorCodes(t *testing.T) {
 	h := setup(t, 8, 8)
 	body := appBody(t)
 	ev := api.DataReadyEvent{Bucket: "input", Key: "k", SessionID: "s1"}
-	checkCode(t, api.EventTriggerNotify(ev, "", unsafe.Pointer(new(byte))), api.ErrNotInitialized)
+	checkCode(t, api.EventTriggerNotify(ev, api.FunctionIdentity{}, unsafe.Pointer(new(byte))), api.ErrNotInitialized)
 	checkCode(t, api.TriggerInit(""), api.ErrInvalidArgument)
 	checkCode(t, api.TriggerInit("missing.json"), api.ErrConfigRead)
 	checkCode(t, api.TriggerInit(put(t, "[]")), api.ErrInvalidConfig)
 	checkCode(t, api.TriggerInit(put(t, strings.Replace(body, "40", "9223372036855", 1))), api.ErrInvalidConfig)
-	checkCode(t, api.EventTriggerNotify(ev, "", unsafe.Pointer(new(byte))), api.ErrNotInitialized)
+	checkCode(t, api.EventTriggerNotify(ev, api.FunctionIdentity{}, unsafe.Pointer(new(byte))), api.ErrNotInitialized)
 	path := h.init(true)
 	conflict := strings.NewReplacer("\"e2e\"", "\"other\"", "\"enabled\":true", "\"enabled\":false").Replace(body)
 	checkCode(t, api.TriggerInit(put(t, conflict)), api.ErrInvalidConfig)
-	checkCode(t, api.EventTriggerNotify(ev, "", nil), api.ErrInvalidArgument)
-	checkCode(t, api.EventTriggerNotify(ev, "unknown", unsafe.Pointer(new(byte))), api.ErrInvalidArgument)
+	checkCode(t, api.EventTriggerNotify(ev, api.FunctionIdentity{}, nil), api.ErrInvalidArgument)
+	checkCode(t, api.EventTriggerNotify(ev, api.FunctionIdentity{SOName: "unknown.so", FuncName: "unknown"}, unsafe.Pointer(new(byte))), api.ErrInvalidArgument)
 	ev.Key = ""
-	checkCode(t, api.EventTriggerNotify(ev, "", unsafe.Pointer(new(byte))), api.ErrInvalidArgument)
+	checkCode(t, api.EventTriggerNotify(ev, api.FunctionIdentity{}, unsafe.Pointer(new(byte))), api.ErrInvalidArgument)
 	ev.Bucket, ev.Key = "missing", "k"
-	checkCode(t, api.EventTriggerNotify(ev, "", unsafe.Pointer(new(byte))), api.ErrInvalidArgument)
+	checkCode(t, api.EventTriggerNotify(ev, api.FunctionIdentity{}, unsafe.Pointer(new(byte))), api.ErrInvalidArgument)
 	h.init(true, "\"e2e\"", "\"third\"", "\"input\"", "\"in3\"", "\"named\"", "\"name3\"",
 		"\"output\"", "\"out3\"", "\"fan\"", "\"fan3\"", "\"idle\"", "\"idle3\"")
 	ev.Bucket = "idle"
-	checkCode(t, api.EventTriggerNotify(ev, "", unsafe.Pointer(new(byte))), 0)
+	checkCode(t, api.EventTriggerNotify(ev, api.FunctionIdentity{}, unsafe.Pointer(new(byte))), 0)
 	checkCode(t, api.TriggerInit(path), api.ErrInvalidState)
 	if len(h.p.audit()) != 0 {
 		t.Fatal("invalid notifications submitted work")
@@ -604,12 +613,12 @@ func cleanup(t *testing.T) {
 	h := setup(t, 8, 8)
 	h.probe.steps["B"] = []probeStep{lowCPU}
 	h.init(true)
-	a := h.send("fan", "k", "", "x")
+	a := h.send("fan", "k", api.FunctionIdentity{}, "x")
 	h.advance(step)
 	h.log.await(t, "RESOURCE_INSUFFICIENT", "B", 2)
 	h.closeRuntime()
 	h.log.await(t, "TASK_CANCELLED", "B", 1)
-	checkCode(t, api.EventTriggerNotify(api.DataReadyEvent{}, "", unsafe.Pointer(new(byte))), api.ErrNotInitialized)
+	checkCode(t, api.EventTriggerNotify(api.DataReadyEvent{}, api.FunctionIdentity{}, unsafe.Pointer(new(byte))), api.ErrNotInitialized)
 	h.p.start()
 	h.expect("A", api.InputValue, a, "A[x]")
 	h.count("B", 0, 0)
@@ -626,11 +635,11 @@ func multiApp(t *testing.T) {
 		`{"so_name":"other.so","func_name":"app2_only","resource":{"cpu_cores":1,"memory_mb":1}},`, 1)
 	checkCode(t, api.TriggerInit(put(t, strings.Replace(other, "idle2", "idle", 1))), api.ErrInvalidConfig)
 	checkCode(t, api.TriggerInit(put(t, other)), 0)
-	checkCode(t, api.EventTriggerNotify(api.DataReadyEvent{Bucket: "input", Key: "k", SessionID: "s1"}, "app2_only", unsafe.Pointer(new(byte))), api.ErrInvalidArgument)
+	checkCode(t, api.EventTriggerNotify(api.DataReadyEvent{Bucket: "input", Key: "k", SessionID: "s1"}, api.FunctionIdentity{SOName: "other.so", FuncName: "app2_only"}, unsafe.Pointer(new(byte))), api.ErrInvalidArgument)
 	h.p.start()
-	main := h.send("input", "k", "", "x")
+	main := h.send("input", "k", api.FunctionIdentity{}, "x")
 	h.expect("A", api.InputValue, main, "A[x]")
-	arg := h.send("in2", "k", "", "y")
+	arg := h.send("in2", "k", api.FunctionIdentity{}, "y")
 	select {
 	case x := <-h.p.output:
 		if x.err != nil || x.task.Function.SOName != "other.so" || x.bytes != "A[y]" ||
@@ -646,8 +655,8 @@ func repeatedEvent(t *testing.T) {
 	h := setup(t, 8, 8)
 	h.init(true)
 	h.p.start()
-	a := h.send("input", "same", "B", "x")
-	b := h.send("input", "same", "B", "x")
+	a := h.send("input", "same", api.FunctionIdentity{SOName: "second.so", FuncName: "B"}, "x")
+	b := h.send("input", "same", api.FunctionIdentity{SOName: "second.so", FuncName: "B"}, "x")
 	if a != b {
 		t.Fatal("SDK object identity changed")
 	}
@@ -690,7 +699,7 @@ func optionalResources(t *testing.T, dimension string, enabled, recover bool) {
 	}
 	h.init(enabled, changes...)
 	h.p.start()
-	a := h.send("input", "k", "", "x")
+	a := h.send("input", "k", api.FunctionIdentity{}, "x")
 	if dimension == "telemetry" {
 		out := h.log.await(t, "RESOURCE_PROBE_FAILED", "A", 1)
 		if out["probe_failure_reason"] != "read" {

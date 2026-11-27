@@ -13,6 +13,12 @@ type DataReadyEvent struct {
 	SessionID string
 }
 
+// FunctionIdentity 标识产出数据的共享库和函数。零值表示外部 Actor。
+type FunctionIdentity struct {
+	SOName   string `json:"so_name"`
+	FuncName string `json:"func_name"`
+}
+
 // InputMode 决定任务向函数提供值、键和值，还是仅提供键，见 V0.6 §10.5.3。
 type InputMode uint8
 

@@ -36,6 +36,11 @@ type FunctionInfo struct {
 	Resource ResourceSpec
 }
 
+type FunctionIdentity struct {
+	SOName   string `json:"so_name"`
+	FuncName string `json:"func_name"`
+}
+
 type TaskArgument struct {
 	Key      string
 	DataAddr unsafe.Pointer
@@ -61,7 +66,7 @@ type TriggerModule interface {
 	TriggerInit(appJSONPath string) error
 	EventTriggerNotify(
 		event DataReadyEvent,
-		sourceFuncName string,
+		sourceFuncName FunctionIdentity,
 		dataAddr unsafe.Pointer,
 	) error
 }

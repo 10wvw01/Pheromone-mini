@@ -114,7 +114,7 @@ type mockSDK struct {
 	lengths   map[unsafe.Pointer]int
 }
 
-func (s *mockSDK) commit(event api.DataReadyEvent, source, data string) (api.TaskArgument, error) {
+func (s *mockSDK) commit(event api.DataReadyEvent, source api.FunctionIdentity, data string) (api.TaskArgument, error) {
 	s.mu.Lock()
 	a, seen := s.committed[event]
 	if seen {
@@ -348,7 +348,7 @@ func checkCode(t *testing.T, err error, code api.StatusCode) {
 	}
 }
 
-func (h *harness) send(bucket, key, source, data string) api.TaskArgument {
+func (h *harness) send(bucket, key string, source api.FunctionIdentity, data string) api.TaskArgument {
 	h.t.Helper()
 	a, err := h.sdk.commit(api.DataReadyEvent{Bucket: bucket, Key: key, SessionID: "s1"}, source, data)
 	checkCode(h.t, err, 0)

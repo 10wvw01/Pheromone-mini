@@ -11,6 +11,8 @@ import (
 type (
 	// DataReadyEvent 是 V0.6 §10.5.1 定义的数据就绪通知。
 	DataReadyEvent = contract.DataReadyEvent
+	// FunctionIdentity 标识通知的来源函数。
+	FunctionIdentity = contract.FunctionIdentity
 	// InputMode 是 V0.6 §10.5.3 定义的任务输入形式。
 	InputMode = contract.InputMode
 	// GPUResourceSpec 描述 V0.6 §14.7 的 GPU 资源需求。
@@ -56,8 +58,8 @@ func TriggerInit(appJSONPath string) error {
 }
 
 // EventTriggerNotify 处理 SDK 成功提交后的数据就绪通知。
-// 函数产出时，SDK 从协程池提供的本次调用上下文透传 sourceFuncName。外部 Actor 产出时传空字符串。
+// 函数产出时，SDK 从协程池提供的本次调用上下文透传 sourceFuncName。外部 Actor 产出时传 FunctionIdentity{}。
 // dataAddr 必须非空，SDK 须按 V0.6 §11.5 保持该地址有效，直至相关排队和执行结束。
-func EventTriggerNotify(event DataReadyEvent, sourceFuncName string, dataAddr unsafe.Pointer) error {
+func EventTriggerNotify(event DataReadyEvent, sourceFuncName FunctionIdentity, dataAddr unsafe.Pointer) error {
 	return wiring.Instance().Notify(event, sourceFuncName, dataAddr)
 }

@@ -188,7 +188,7 @@ func (r *Runtime) publish(app *config.App) error {
 }
 
 // beginNotify 按 V0.6 §13.1 核对状态、通知参数和数据桶归属，首条有效通知将运行时切换为运行状态。
-func (r *Runtime) beginNotify(event contract.DataReadyEvent, source string, addr unsafe.Pointer) (bucket, error) {
+func (r *Runtime) beginNotify(event contract.DataReadyEvent, source contract.FunctionIdentity, addr unsafe.Pointer) (bucket, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stage != ready && r.stage != running {
@@ -204,8 +204,11 @@ func (r *Runtime) beginNotify(event contract.DataReadyEvent, source string, addr
 	if b.app == nil {
 		return bucket{}, apiError(contract.ErrInternal, "bucket index has no owning App")
 	}
-	if _, ok := b.app.Functions[source]; source != "" && !ok {
-		return bucket{}, apiError(contract.ErrInvalidArgument, "source function is not registered in the bucket's App")
+	if source != (contract.FunctionIdentity{}) {
+		fn, ok := b.app.Functions[source.FuncName]
+		if !ok || fn.SOName != source.SOName {
+			return bucket{}, apiError(contract.ErrInvalidArgument, "source so_name and func_name must identify a function in the bucket's App")
+		}
 	}
 	// 仅在所有参数检查通过后进入运行状态。
 	r.stage = running
@@ -214,7 +217,7 @@ func (r *Runtime) beginNotify(event contract.DataReadyEvent, source string, addr
 }
 
 // Notify 按 V0.6 §6.2、§7.5 和 §8.4 选择触发路径，为每个命中项构建独立任务。
-func (r *Runtime) Notify(event contract.DataReadyEvent, source string, addr unsafe.Pointer) error {
+func (r *Runtime) Notify(event contract.DataReadyEvent, source contract.FunctionIdentity, addr unsafe.Pointer) error {
 	b, err := r.beginNotify(event, source, addr)
 	if err != nil {
 		return err
@@ -230,7 +233,7 @@ func (r *Runtime) Notify(event contract.DataReadyEvent, source string, addr unsa
 			Args: []contract.TaskArgument{{Key: strings.Clone(event.Key), DataAddr: addr}},
 		}
 		log := r.router.log.With("app_name", b.app.Name, "bucket", strings.Clone(event.Bucket),
-			"source_func_name", strings.Clone(source), "route_path", path, "trigger_name", rule,
+			"source_so_name", strings.Clone(source.SOName), "source_func_name", strings.Clone(source.FuncName), "route_path", path, "trigger_name", rule,
 			"so_name", fn.SOName, "func_name", fn.FuncName, "session_id", task.SessionID,
 			"key", task.Args[0].Key, "input_mode", task.InputMode, "args_count", len(task.Args))
 		r.router.submit(task, b.app.Domain, b.app.Delay, log)

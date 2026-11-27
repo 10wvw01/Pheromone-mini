@@ -1,0 +1,45 @@
+{
+  "app_name": "batch_demo_copy",
+  "description": "整批数据经过 IMMEDIATE、BY_NAME 和 DIRECT 的端到端示例",
+  "version": "0.6.0",
+  "scheduler": {
+    "delay_queue": {
+      "enabled": false,
+      "retry_interval_ms": 10,
+      "max_wait_ms": 1000
+    }
+  },
+  "functions": [
+    {"so_name": "prepare.so", "func_name": "prepare", "resource": {"cpu_cores": 1, "memory_mb": 8}},
+    {"so_name": "transform.so", "func_name": "transform", "resource": {"cpu_cores": 1, "memory_mb": 8}},
+    {"so_name": "collect.so", "func_name": "collect", "resource": {"cpu_cores": 1, "memory_mb": 8}},
+    {"so_name": "fallback.so", "func_name": "fallback", "resource": {"cpu_cores": 1, "memory_mb": 8}}
+  ],
+  "dependencies": [
+    {
+      "type": "DIRECT",
+      "src_functions": [{"so_name": "transform.so", "func_name": "transform"}],
+      "tgt_functions": ["collect"]
+    }
+  ],
+  "triggers": [
+    {
+      "bucket": "input",
+      "trigger_name": "prepare_input",
+      "primitive_type": "IMMEDIATE",
+      "primitive": {"function": "prepare"}
+    },
+    {
+      "bucket": "prepared",
+      "trigger_name": "transform_ready",
+      "primitive_type": "BY_NAME",
+      "primitive": {"function": "transform", "key_name": "ready"}
+    },
+    {
+      "bucket": "transformed",
+      "trigger_name": "fallback_without_direct",
+      "primitive_type": "IMMEDIATE",
+      "primitive": {"function": "fallback"}
+    }
+  ]
+}

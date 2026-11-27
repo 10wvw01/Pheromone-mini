@@ -7,7 +7,7 @@
 ## 设计与示例
 
 - [正式设计文档](docs/DESIGN.md)
-- [app.json 与 Go 对接示例](examples/)
+- [可运行的 E2E 示例与接口说明](examples/README.md)
 
 ## 功能范围
 

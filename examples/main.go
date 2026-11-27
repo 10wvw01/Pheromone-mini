@@ -1,26 +1,13 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"slices"
 	"unsafe"
 
 	"triggerEngine/api"
-	"triggerEngine/internal/config"
-	"triggerEngine/internal/engine"
-	"triggerEngine/internal/resource"
-	"triggerEngine/internal/wiring"
-	"triggerEngine/mockpool"
 )
-
-// demoProbe 给出固定资源快照，示例仍通过真实 Router 的资源准入。
-type demoProbe struct{}
-
-func (demoProbe) Read(context.Context, config.Domain, api.FunctionInfo) (resource.Snapshot, error) {
-	return resource.Snapshot{CPUAvailable: 4, MemoryAvailable: 64 * config.MiB}, nil
-}
 
 type step struct {
 	function string
@@ -34,15 +21,7 @@ func main() {
 	}
 }
 
-// run 是本地验收驱动，负责装配 Trigger 和模拟下游消费。
-func run() error {
-	pool := mockpool.New(4)
-	scheduler := engine.New(engine.Dependencies{Pool: pool, Probe: demoProbe{}})
-	defer scheduler.Close()
-	if err := wiring.Install(scheduler); err != nil {
-		return err
-	}
-
+func runScenario(pool taskConsumer) error {
 	if err := initialize("examples/app.json", "examples/app-score.json", "examples/app-report.json"); err != nil {
 		return err
 	}
@@ -102,7 +81,7 @@ func run() error {
 	return nil
 }
 
-func runChain(pool *mockpool.Pool, sdk demoSDK, key batchKey, input []int, steps []step, want []int) error {
+func runChain(pool taskConsumer, sdk demoSDK, key batchKey, input []int, steps []step, want []int) error {
 	// 跨 App 链的入口由 Actor 提交本地批次，来源函数标识为空。
 	if err := sdk.commit(key, session, input, api.FunctionIdentity{}); err != nil {
 		return err

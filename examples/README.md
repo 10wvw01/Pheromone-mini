@@ -45,6 +45,7 @@ go run ./examples
 
 - [upstream.go](upstream.go) 展示上游接入。初始化及提交数据时，分别调用 `api.TriggerInit` 和 `api.EventTriggerNotify`。
 - 仓库根目录的 [mockpool](../mockpool/pool.go) 是 Trigger 可注入的简易下游 Pool，实现有界、非阻塞的进程内队列。
-- [main.go](main.go) 是 E2E 运行和验收入口。它将 Mock Pool 注入 Trigger，逐项出队并用 Go 回调模拟执行。资源探测使用固定快照，配置中的 SO 名用于路由校验。
+- [main.go](main.go) 编排三个 App 的 E2E 场景，并通过验收用的消费接口逐项检查任务。
+- [runner.go](runner.go) 负责本地验收环境。它创建临时 Pool、配置固定资源快照并装配调度器。队列容量和资源快照都属于验收环境配置。
 
 集成方在本仓库模块边界内用 `internal/engine.New` 装配 Pool，通过 `internal/wiring.Install` 安装运行时，随后上游才调用 `api` 包。Go 的 `internal` 可见性限制适用于装配代码，外部 Go 工程可以通过已装配的 `api` 接入业务通知。完整状态和资源准入契约见 [正式设计](../docs/DESIGN.md)。
